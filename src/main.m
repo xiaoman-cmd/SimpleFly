@@ -13,7 +13,7 @@ static IMKServer *gServer = nil;   /* 必须持有，IMKServer 自己不保活 *
 
 /* 首次运行时把自定义快捷输入的示例文件写出来。
  * 用户不用去猜格式 —— 打开 ~/Library/Application Support/SimpleFly/phrase.txt
- * 把 "fmc = 凤满成" 那一行改成自己要的就行，改完立即生效（不必重启输入法）。 */
+ * 把 "abc = 测试短语" 那一行改成自己要的就行，改完立即生效（不必重启输入法）。 */
 static void SFEnsurePhraseSample(void)
 {
     NSArray<NSString *> *dirs =

@@ -56,7 +56,7 @@ static NSString *SFUserDictPath(void)
     return [SFAppSupportDir() stringByAppendingPathComponent:@"simplefly.dict"];
 }
 
-/* 自定义快捷输入表：fmc = 凤满成 那一份。
+/* 自定义快捷输入表：abc = 测试短语 那一份。
  * 支持用环境变量指到别处 —— 离线单测靠它把短语表放到临时目录，
  * 免得跑一次测试就把用户自己配的短语覆盖掉。 */
 static NSString *SFPhrasePath(void)
@@ -446,7 +446,7 @@ static NSScreen *SFScreenForRect(NSRect r)
 
 #pragma mark 候选构建
 
-/* 自定义快捷输入表（fmc = 凤满成 那份）。
+/* 自定义快捷输入表（abc = 测试短语 那份）。
  *
  * 惰性加载 + 按 mtime 热重载，放在这里而不是启动时，是为了「改完文件不用重启输入法」：
  * 每次组字开头检查一次文件时间，代价只是一次 stat。 */
@@ -1394,7 +1394,7 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
         NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
         if (now - _dictWarnAt > 20.0) {
             _dictWarnAt = now;
-            [self showHUD:@"未找到码表 simplefly.dict（见 README §6）"
+            [self showHUD:@"未找到码表 simplefly.dict（获取方法见 README）"
                    accent:YES seconds:5.0 client:sender];
         }
         return NO;
@@ -1650,8 +1650,8 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     }
 
     /* 自定义短语的前缀同样算「还没打完」。
-     * 没有这一条，用户绑了 fmc=凤满成 之后敲到 fm 会因为码表里什么都没有、
-     * 被判成空码回退并 beep —— 于是永远打不出 fmc。 */
+     * 没有这一条，用户绑了 abc=测试短语 之后敲到 fm 会因为码表里什么都没有、
+     * 被判成空码回退并 beep —— 于是永远打不出 abc。 */
     if (sf_phrase_has_prefix([self phraseBook], _code.UTF8String)) {
         [self refreshWithClient:sender];
         return YES;

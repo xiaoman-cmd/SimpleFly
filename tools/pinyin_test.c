@@ -123,7 +123,7 @@ static void test_is_syllable(void)
     check(sf_pinyin_is_syllable("hao") == 1, "hao 是合法全拼");
     check(sf_pinyin_is_syllable("shuang") == 1, "shuang 是合法全拼");
     check(sf_pinyin_is_syllable("hc") == 0, "hc 不是合法全拼 → 反查时按双拼码处理");
-    check(sf_pinyin_is_syllable("fmc") == 0, "fmc 不是合法全拼 → 当双拼码处理");
+    check(sf_pinyin_is_syllable("abc") == 0, "abc 不是合法全拼 → 当双拼码处理");
     check(sf_pinyin_is_syllable("xyz") == 0, "xyz 不是");
 }
 

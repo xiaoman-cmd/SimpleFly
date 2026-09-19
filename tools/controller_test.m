@@ -1495,7 +1495,7 @@ static void test_output_trad(void){
 
 static void test_custom_phrase(void)
 {
-    puts("\n== 自定义快捷输入（fmc = 凤满成）==");
+    puts("\n== 自定义快捷输入（abc = 测试短语）==");
     if (!gPhrasePath) { CHECK(NO, "没有指定短语表路径"); return; }
 
     NSString *gap = FindGapCode();
@@ -1504,7 +1504,7 @@ static void test_custom_phrase(void)
 
     NSString *head2 = [gap substringToIndex:2];
     WritePhraseFile([NSString stringWithFormat:
-                        @"# 测试用\n%@ = 凤满成\n", gap]);
+                        @"# 测试用\n%@ = 测试短语\n", gap]);
 
     /* --- 中途不能判空码：首字符码表有，两字符码表没有，全靠短语前缀保护 --- */
     Fresh();
@@ -1518,17 +1518,17 @@ static void test_custom_phrase(void)
     CHECK([ObjIvar(gCtl, "_code") isEqualToString:gap], "第 3 个字符补齐：%s", CStr(gap));
     CHECK(CandsCount() >= 1, "有候选");
     if (CandsCount() >= 1)
-        CHECK([((SFCandidate *)Cands()[0]).text isEqualToString:@"凤满成"],
+        CHECK([((SFCandidate *)Cands()[0]).text isEqualToString:@"测试短语"],
               "自定义短语排在候选第一位：%s", CStr(((SFCandidate *)Cands()[0]).text));
 
     Type(' ', 0);
-    CHECK([gClient.output isEqualToString:@"凤满成"], "空格上屏：%s", CStr(gClient.output));
+    CHECK([gClient.output isEqualToString:@"测试短语"], "空格上屏：%s", CStr(gClient.output));
 
     /* --- 数字键 1 也能上屏 --- */
     Fresh();
     TypeString(gap.UTF8String);
     Type('1', 0);
-    CHECK([gClient.output isEqualToString:@"凤满成"], "数字键 1 上屏短语：%s", CStr(gClient.output));
+    CHECK([gClient.output isEqualToString:@"测试短语"], "数字键 1 上屏短语：%s", CStr(gClient.output));
 
     /* --- 短语编码是 4 码时不该触发四键自动上屏（要让用户确认）--- */
     NSString *four = [gap stringByAppendingString:@"z"];   /* gap 是 3 码且码表无此码 */

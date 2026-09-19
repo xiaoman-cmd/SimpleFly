@@ -1,7 +1,7 @@
 /* phrase_test.c —— 自定义快捷输入表单测（纯 C，不需要码表）
  *
  * 自己造一个临时文件来测，覆盖：两种分隔符、注释与空行、多条目同码、
- * 前缀查询（打 fmc 时中途的 fm 不能判空码）、热重载判断、非法行跳过。
+ * 前缀查询（打 abc 时中途的 fm 不能判空码）、热重载判断、非法行跳过。
  */
 #include "phrase.h"
 
@@ -43,7 +43,7 @@ static void test_basic(void)
     puts("\n== 解析与精确查询 ==");
     WriteFile("# 注释行\n"
               "\n"
-              "fmc = 凤满成\n"
+              "abc = 测试短语\n"
               "dz\t我的常用地址\n"
               "   sj   =   13900000000   \n"     /* 前后空白 */
               "YX = you@example.com\n"          /* 大写编码 */
@@ -60,8 +60,8 @@ static void test_basic(void)
     const char *out[8];
     int n;
 
-    n = sf_phrase_lookup(p, "fmc", out, 8);
-    check(n == 1 && strcmp(out[0], "凤满成") == 0, "fmc → 凤满成（得到 %d 条）", n);
+    n = sf_phrase_lookup(p, "abc", out, 8);
+    check(n == 1 && strcmp(out[0], "测试短语") == 0, "abc → 测试短语（得到 %d 条）", n);
 
     n = sf_phrase_lookup(p, "dz", out, 8);
     check(n == 1 && strcmp(out[0], "我的常用地址") == 0, "dz → 制表符分隔也认");
@@ -128,15 +128,15 @@ static void test_multi_and_limit(void)
 static void test_prefix(void)
 {
     puts("\n== 前缀查询（防「打着打着被判空码」）==");
-    WriteFile("fmc = 凤满成\nzzz = 无关\n");
+    WriteFile("abc = 测试短语\nzzz = 无关\n");
 
     SFPhrases *p = sf_phrase_load(g_path);
     if (!p) { check(0, "加载失败"); return; }
 
-    check(sf_phrase_has_prefix(p, "f")   == 1, "f 是 fmc 的前缀");
-    check(sf_phrase_has_prefix(p, "fm")  == 1, "fm 是 fmc 的前缀");
-    check(sf_phrase_has_prefix(p, "fmc") == 1, "fmc 自己也算");
-    check(sf_phrase_has_prefix(p, "fmcx")== 0, "fmcx 不是任何编码的前缀");
+    check(sf_phrase_has_prefix(p, "a")   == 1, "a 是 abc 的前缀");
+    check(sf_phrase_has_prefix(p, "ab")  == 1, "ab 是 abc 的前缀");
+    check(sf_phrase_has_prefix(p, "abc") == 1, "abc 自己也算");
+    check(sf_phrase_has_prefix(p, "abcx")== 0, "abcx 不是任何编码的前缀");
     check(sf_phrase_has_prefix(p, "g")   == 0, "g 不是");
     check(sf_phrase_has_prefix(p, "zz")  == 1, "zz 是 zzz 的前缀");
 
@@ -191,8 +191,8 @@ static void test_sample(void)
     check(p != NULL, "示例文件能被正确解析");
     if (p) {
         const char *out[4];
-        int n = sf_phrase_lookup(p, "fmc", out, 4);
-        check(n == 1 && strcmp(out[0], "凤满成") == 0, "示例里的 fmc = 凤满成 可用");
+        int n = sf_phrase_lookup(p, "abc", out, 4);
+        check(n == 1 && strcmp(out[0], "测试短语") == 0, "示例里的 abc = 测试短语 可用");
         sf_phrase_free(p);
     }
     /* 已存在时不覆盖 */

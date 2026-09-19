@@ -53,7 +53,7 @@ static void test_load(void)
     SetFakeNow();
     WriteFile("# 注释\n"
               "hc\t好\t1751700000\n"          /* 刚刚用过 */
-              "fmc\t凤满成\n"                 /* 手写、无时间戳 → used=0，不过期 */
+              "abc\t测试短语\n"                 /* 手写、无时间戳 → used=0，不过期 */
               "xx\t旧词\t1\n"                 /* 1970 年 → 已过期，应被过滤 */
               "\n"
               "没有分隔符\n");
@@ -64,7 +64,7 @@ static void test_load(void)
     check(sf_freq_count(f) == 2, "过期与非法行被过滤，剩 2 条（得到 %zu）", sf_freq_count(f));
     check(sf_freq_get(f, "hc") && strcmp(sf_freq_get(f, "hc"), "好") == 0,
           "hc → 好");
-    check(sf_freq_get(f, "fmc") && strcmp(sf_freq_get(f, "fmc"), "凤满成") == 0,
+    check(sf_freq_get(f, "abc") && strcmp(sf_freq_get(f, "abc"), "测试短语") == 0,
           "手写无时间戳的条目能查到（不过期）");
     check(sf_freq_get(f, "xx") == NULL, "过期条目查不到");
     check(sf_freq_get(f, "nope") == NULL, "没记过的编码返回 NULL");
