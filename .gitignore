@@ -17,5 +17,11 @@ build/
 # 生成方法见 README「§6 码表」。
 resources/simplefly.dict
 
+# 从官方挂接包拿到的 .bin 二进制主码表（引擎不解析；版权同上，不分发）
+resources/simplefly.official.bin
+
+# 本地工作区数据（会话记忆等）
+.workbuddy/
+
 # 由 tools/gen_symbols.py 从码表自动生成（属码表衍生内容，同样不分发）
 docs/符号速查.md

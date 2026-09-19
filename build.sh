@@ -10,7 +10,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/build/SimpleFly.app"
 SDK="$(xcrun --show-sdk-path)"
-MIN_MACOS="11.0"
+# 默认 11.0；老版 Command Line Tools（clang < 12 不认识 11.0）可外部覆盖：
+#   SIMPLEFLY_MIN_MACOS=10.15 ./build.sh
+MIN_MACOS="${SIMPLEFLY_MIN_MACOS:-11.0}"
 DICT="$ROOT/resources/simplefly.dict"
 
 # 本仓库不含码表（版权归小鹤官方，见 NOTICE）。优先用 resources/ 下自己生成的那份，
@@ -100,7 +102,7 @@ build_app() {
     cp "$DICT" "$APP/Contents/Resources/simplefly.dict"
     echo "    码表: $(wc -l < "$DICT" | tr -d ' ') 行"
   else
-    echo "    ! 缺少 $DICT，先跑: python3 tools/build_dict.py <rime-flypy 的 flypy 目录>" >&2
+    echo "    ! 缺少 ${DICT}，先跑: python3 tools/build_dict.py <rime-flypy 的 flypy 目录>" >&2
   fi
   if [ -f "$ROOT/resources/s2t.tsv" ]; then
     cp "$ROOT/resources/s2t.tsv" "$APP/Contents/Resources/s2t.tsv"
@@ -149,7 +151,7 @@ run_tests() {
   local have_dict=1
   if [ ! -f "$DICT" ]; then
     have_dict=0
-    echo "==> 注意：没有码表（$DICT），依赖码表的套件将跳过 —— 见 README §6 获取方式" >&2
+    echo "==> 注意：没有码表（${DICT}），依赖码表的套件将跳过 —— 见 README §6 获取方式" >&2
   fi
 
   echo "==> [1/8] 引擎单测（纯 C）"
