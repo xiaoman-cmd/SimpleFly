@@ -1575,8 +1575,15 @@ int main(int argc, char **argv)
 
         puts("===== 控制器按键路由单测 =====");
         if (!SFSharedEngine()) {
-            fprintf(stderr, "码表不可用：%s\n（把 resources/simplefly.dict 放到本可执行文件同目录再跑）\n",
-                    sf_engine_last_error());
+            /* 缺码表也得是个「能活」的状态 —— 这是 clone 本仓库的人第一个撞到的情形
+             * （仓库不含码表，见 README §6）。只验证三件事：按键不吞、不崩、有可见提示。
+             * 其余用例都要真码表，缺表时跑下去没有意义，所以跑完这项就退出。 */
+            Fresh();
+            CHECK(TypeKey(kVK_ANSI_A, 0) == NO, "缺码表：按键不被吞（字母照常上屏）");
+            CHECK(gClient.output.length == 0, "缺码表：输入法自身不上屏任何东西");
+            CHECK(HUDText().length > 0, "缺码表：弹出可见提示，而不是只 NSLog 一行");
+            printf("\n===== %d 通过 / %d 失败 =====\n", g_pass, g_fail);
+            fprintf(stderr, "（SIMPLEFLY_DICT_FILE 指向的码表不存在，只跑了缺表守卫用例）\n");
             return 2;
         }
         printf("码表：%zu 条 / %zu 个编码\n",

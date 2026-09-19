@@ -47,8 +47,12 @@ static NSString *SFAppSupportDir(void)
     return [base stringByAppendingPathComponent:@"SimpleFly"];
 }
 
+/* 用户覆盖用的码表。与 SFPhrasePath / SFS2TPath 同构：支持环境变量指到别处，
+ * 这样缺码表的分支也能离线测（把它指到一个不存在的路径即可）。 */
 static NSString *SFUserDictPath(void)
 {
+    const char *env = getenv("SIMPLEFLY_DICT_FILE");
+    if (env && *env) return [NSString stringWithUTF8String:env];
     return [SFAppSupportDir() stringByAppendingPathComponent:@"simplefly.dict"];
 }
 
@@ -113,8 +117,12 @@ SFEngine *SFSharedEngine(void)
     static SFEngine *engine;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+        /* 环境变量显式指定码表时**不回退**：既然指名要这份，找不到就该报出来。
+         * 否则把它指到一个不存在的路径会静默用回 bundle 里那份，
+         * 「缺码表」这条分支永远测不到（离线单测正是靠这个变量模拟缺表的）。 */
+        const char *env = getenv("SIMPLEFLY_DICT_FILE");
         NSString *path = SFUserDictPath();
-        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        if (!(env && *env) && ![[NSFileManager defaultManager] fileExistsAtPath:path]) {
             path = [[NSBundle mainBundle] pathForResource:@"simplefly" ofType:@"dict"];
         }
         if (path.length == 0) {
@@ -182,6 +190,7 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
     NSString *_pendingMiss;                 /* 被废弃、等下一次上屏来配对的码 */
     NSUInteger _maxCands;
     NSString *_themeName;                   /* 当前主题名，对应 NSUserDefaults 的 Theme */
+    NSTimeInterval _dictWarnAt;             /* 上次弹「缺码表」提示的时间（节流用） */
 }
 
 - (id)initWithServer:(IMKServer *)server delegate:(id)delegate client:(id)inputClient
@@ -1375,6 +1384,21 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
 - (BOOL)handleKeyDown:(NSEvent *)event client:(id)sender
 {
     if (_shiftDown) _shiftCombo = YES;   /* Shift 期间按了别的键 → 不算「单敲 Shift」 */
+
+    /* 码表缺失守卫。本仓库不含码表（版权归小鹤官方，见 NOTICE），clone 之后必须自己
+     * 放一份才能打汉字。缺表时按键一点反应都没有，而 NSLog 用户根本看不到 ——
+     * 最容易被误判成「装坏了」，所以这里弹一条可见提示，指名放到哪个目录。
+     * 返回 NO 不吞键：字母照常上屏，至少还能当英文键盘用，不会看起来像卡死。
+     * 节流 20 秒，免得连续打字时 HUD 一直闪。 */
+    if (!SFSharedEngine()) {
+        NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+        if (now - _dictWarnAt > 20.0) {
+            _dictWarnAt = now;
+            [self showHUD:@"未找到码表 simplefly.dict（见 README §6）"
+                   accent:YES seconds:5.0 client:sender];
+        }
+        return NO;
+    }
 
     NSEventModifierFlags f = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
     BOOL cmd   = (f & NSEventModifierFlagCommand) != 0;
