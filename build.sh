@@ -143,16 +143,33 @@ run_tests() {
   mkdir -p "$ROOT/build"
   local fail=0
 
+  # 本仓库不含码表（版权归小鹤官方，见 README §6）。clone 之后没码表是常态，
+  # 依赖码表的套件要「明确跳过」而不是报一堆莫名的失败 —— 更不能因为 cp 一个
+  # 不存在的文件被 set -e 打断，那样连后面不依赖码表的套件都跑不到了。
+  local have_dict=1
+  if [ ! -f "$DICT" ]; then
+    have_dict=0
+    echo "==> 注意：没有码表（$DICT），依赖码表的套件将跳过 —— 见 README §6 获取方式" >&2
+  fi
+
   echo "==> [1/8] 引擎单测（纯 C）"
-  clang "${CFLAGS[@]}" "$ROOT/src/engine.c" "$ROOT/tools/engine_test.c" \
-        -o "$ROOT/build/engine_test"
-  "$ROOT/build/engine_test" "$DICT" --selftest && echo "    ✓ 通过" || fail=1
+  if [ "$have_dict" -eq 1 ]; then
+    clang "${CFLAGS[@]}" "$ROOT/src/engine.c" "$ROOT/tools/engine_test.c" \
+          -o "$ROOT/build/engine_test"
+    "$ROOT/build/engine_test" "$DICT" --selftest && echo "    ✓ 通过" || fail=1
+  else
+    echo "    – 跳过（无码表）"
+  fi
 
   echo
   echo "==> [2/8] 引擎反查单测（纯 C）"
-  clang "${CFLAGS[@]}" -I "$ROOT/src" "$ROOT/src/engine.c" "$ROOT/tools/reverse_test.c" \
-        -o "$ROOT/build/reverse_test"
-  "$ROOT/build/reverse_test" "$DICT" && echo "    ✓ 通过" || fail=1
+  if [ "$have_dict" -eq 1 ]; then
+    clang "${CFLAGS[@]}" -I "$ROOT/src" "$ROOT/src/engine.c" "$ROOT/tools/reverse_test.c" \
+          -o "$ROOT/build/reverse_test"
+    "$ROOT/build/reverse_test" "$DICT" && echo "    ✓ 通过" || fail=1
+  else
+    echo "    – 跳过（无码表）"
+  fi
 
   echo
   echo "==> [3/8] 标点单测（纯 C）"
@@ -182,11 +199,20 @@ run_tests() {
         "$ROOT/src/engine.c" "$ROOT/src/punctuation.c" \
         "$ROOT/src/pinyin.c" "$ROOT/src/phrase.c" "$ROOT/src/freq.c" "$ROOT/src/s2t.c" \
         "$ROOT/tools/controller_test.m" -o "$ROOT/build/controller_test"
-  # 测试二进制从自己旁边读码表（SFSharedEngine 找不到 bundle 资源时的兜底路径）
-  cp "$DICT" "$ROOT/build/simplefly.dict"
+  # 测试二进制从自己旁边读码表（SFSharedEngine 找不到 bundle 资源时的兜底路径）。
+  # 缺码表时必须把上一次残留的旧表删掉 —— 留着会让 controller_test 以为有表，
+  # 「缺表」这条分支就永远测不到。
+  if [ "$have_dict" -eq 1 ]; then cp "$DICT" "$ROOT/build/simplefly.dict"
+  else rm -f "$ROOT/build/simplefly.dict"; fi
   cp "$ROOT/resources/s2t.tsv" "$ROOT/build/s2t.tsv"
   cp "$ROOT/resources/t2s.tsv" "$ROOT/build/t2s.tsv"
-  ( cd "$ROOT/build" && ./controller_test ) && echo "    ✓ 通过" || fail=1
+  # 注意：这里不能用 `cmd; rc=$?` —— set -e 会在 cmd 返回非 0 时立刻退出脚本，
+  # 根本走不到下一行（controller_test 缺表时返回 2）。必须走 `|| rc=$?` 吃掉退出码。
+  local rc=0
+  ( cd "$ROOT/build" && ./controller_test ) || rc=$?
+  if   [ "$rc" -eq 2 ]; then echo "    – 无码表：只跑了缺表守卫用例（不吞键 / 不上屏 / 有提示）"
+  elif [ "$rc" -ne 0 ]; then fail=1
+  else echo "    ✓ 通过"; fi
 
   echo
   echo "==> [7/8] 重码记忆单测（纯 C）"
