@@ -1,0 +1,21 @@
+# 构建产物
+build/
+*.o
+
+# macOS
+.DS_Store
+
+# ---- 码表：不进仓库 ----
+#
+# 小鹤音形码表的版权归小鹤官方（flypy.cc）所有，官方明确声明
+# 「任何第三方内置小鹤音形方案的行为均为侵权」，最终用户许可协议
+# 也只授予「安装和使用」的权利。因此本仓库不分发码表。
+#
+# 请自行从官方渠道获取，放到下面任一位置：
+#   ~/Library/Application Support/SimpleFly/simplefly.dict   运行时优先读这里
+#   resources/simplefly.dict                                 构建时打进 app bundle
+# 生成方法见 README「§6 码表」。
+resources/simplefly.dict
+
+# 由 tools/gen_symbols.py 从码表自动生成（属码表衍生内容，同样不分发）
+docs/符号速查.md

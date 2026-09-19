@@ -1,0 +1,42 @@
+# NOTICE
+
+SimpleFly —— 一个 macOS 上的小鹤双拼 / 小鹤音形输入引擎与 InputMethodKit 前端。
+
+---
+
+## 一、关于「小鹤」（务必先读）
+
+- 本项目是**非官方的第三方实现**，与小鹤官方（<https://flypy.cc>）**没有任何关联**，也未获得其授权。
+- 「小鹤」「小鹤双拼」「小鹤音形」为权利人商标，本仓库仅在**指代输入方案**的意义上使用这些名称。
+- **小鹤音形码表的版权归小鹤官方所有**。官方声明：
+
+  > 小鹤音形尚无授权发布版本，任何第三方内置小鹤音形方案的行为均为侵权。
+
+  其《最终用户许可协议》亦规定：只授予使用许可而非出售，仅授予「在计算机上安装和使用」的权利，禁止反向工程 / 反编译 / 反汇编，任何副本的产权归官方所有。
+
+- **因此本仓库不分发任何码表。** 码表需由使用者自行从官方渠道获取，放到：
+
+  | 位置 | 用途 |
+  |---|---|
+  | `~/Library/Application Support/SimpleFly/simplefly.dict` | 运行时优先读这里 |
+  | `resources/simplefly.dict` | 构建时打进 app bundle（已被 `.gitignore` 排除） |
+
+  生成方法见 README「§6 码表」。
+
+- 同理，由码表自动生成的 `docs/符号速查.md` 也不在仓库内 —— 请用 `python3 tools/gen_symbols.py` 本地生成。
+
+- **自用不受影响**：官方在网盘提供挂接文件供挂接使用，许可协议授予的「安装和使用」权利不受本仓库影响。
+
+## 二、第三方来源
+
+| 内容 | 来源 | 许可 |
+|---|---|---|
+| `resources/s2t.tsv`、`resources/t2s.tsv`（简繁单字映射） | 由 `tools/gen_s2t.py` / `gen_t2s.py` 从 [OpenCC](https://github.com/BYBYes/OpenCC) 的 `STCharacters.txt` 生成 | **Apache-2.0**（可再分发，本文件即署名） |
+| `src/punctuation.c` 的标点映射表 | 参考 [Rime](https://github.com/rime/rime-prelude) 的 `punctuation.yaml` | rime-prelude 为 **LGPL-3.0** |
+
+> **给维护者的一条遗留项**：`src/punctuation.c` 的 47 条映射目前参考自 LGPL-3.0 的 `punctuation.yaml`，与整包的 MIT 严格来说不完全一致。彻底 MIT 化的做法是自己整理重写这 47 条（按键 → 中文标点的映射属功能性数据，可独立得出）。在此之前请以本文件的声明为准。
+
+## 三、其他
+
+- 图标（`SimpleFly.pdf` / `.icns` / `.tiff`）由 `tools/make_icon.m` 用 CoreText 取系统字体字形轮廓生成，产物为矢量路径，**不含字体文件本身**。
+- 引擎层（`engine.c` / `phrase.c` / `pinyin.c` / `punctuation.c` / `freq.c` / `s2t.c`）为纯 C，仅依赖 C 标准库，可脱离 macOS 单独编译与测试。

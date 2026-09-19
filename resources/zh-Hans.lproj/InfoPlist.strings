@@ -1,0 +1,4 @@
+CFBundleName = "SimpleFly";
+CFBundleDisplayName = "SimpleFly";
+"com.simplefly.inputmethod.SimpleFly" = "SimpleFly";
+"com.simplefly.inputmethod.SimpleFly.Hans" = "SimpleFly";
