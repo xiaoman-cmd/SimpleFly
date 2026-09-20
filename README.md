@@ -310,6 +310,23 @@ Ctrl+Shift+T              切换输出模式：以后打的上屏自动转繁体
 | 范围 | F 只转选区；无选区提示先选中；未映射字符（ASCII、emoji、生僻字）原样保留 |
 | 不做 | 词组转换、实时整段转换（要做对需要词组表+分词，见 [开发笔记](docs/开发笔记.md)） |
 
+### 候选窗编码提示（0.6.3）
+
+**场景**：一边打字一边记音形码 —— 学习期不用专门进查编码模式。
+
+```text
+Ctrl+Shift+H    开 / 关（HUD 确认；菜单「候选窗编码提示」等价）
+nihao           打字时候选窗文字底下多一行小字 = 当前高亮候选的音形码
+↓ / ↑           高亮移动，编码跟着变；空格上屏行为不变
+```
+
+| 细节 | 说明 |
+|---|---|
+| 显示内容 | **高亮候选**的完整音形码：单字带中点拆分（`hc·nz`），词语显示整词编码；复用 `noteForText:`（查编码模式同一套） |
+| 开关 | `CodeHint`（默认关）。`showPanelWithClient` **实时读 defaults** —— 改完下一个候选窗即生效，不用 `killall`。三个入口等价：`Ctrl+Shift+H` / 输入法菜单 / defaults |
+| 自动隐藏 | 标点候选无编码 → 该行不出现；HUD 模式提示时不画 |
+| 布局 | 底部 = hairline 分割线 + 编码行，宽度按提示文本自适应，8 套主题的编码行色自动适配 |
+
 ---
 
 
@@ -333,6 +350,7 @@ defaults write $D PanelFlipY       -bool YES                         # 定位差
 defaults write $D DebugPanelRect   -bool YES                         # 定位诊断：把原始矩形打到系统日志
 defaults write $D FreqMemory       -bool NO                          # 关重码记忆（下次选重码恢复默认顺序）
 defaults write $D LogMisses       -bool YES                         # 开打错日志（默认关；产出 mislog.tsv 供 --suggest 分析）
+defaults write $D CodeHint         -bool YES                         # 候选窗底部显示高亮候选音形码（= Ctrl+Shift+H；即时生效，不用 killall）
 killall SimpleFly                                                    # 重新加载
 ```
 
@@ -354,6 +372,7 @@ killall SimpleFly                                                    # 重新加
 | `DebugPanelRect` | `NO` | 每次定位都把原始矩形、镜像结果、鼠标位置打到系统日志，用于一次定下原点方向 |
 | `FreqMemory` | `YES` | 重码记忆（见 §3）。关掉后重码永远按码表顺序；`Ctrl+Shift+;` 清空不受此开关影响 |
 | `LogMisses` | `NO` | 打错日志（见 §3）。记录「废弃的编码 → 最终上屏词」到 `mislog.tsv`，配合 `./build.sh --suggest` 生成短语建议。涉及你打了什么字，所以默认关 |
+| `CodeHint` | `NO` | 候选窗底部显示**当前高亮候选**的音形码（`Ctrl+Shift+H` 同此开关）。开关实时读取，改完下一个候选窗即生效，**不用 killall** |
 
 > **原点点方向反了，偏移量是救不回来的。** `PanelOffsetY` 只能补一个固定的距离；而原点若在
 > 另一头，误差 = `屏幕高 − 2×光标y`，是**和光标高度成正比**的，怎么调都对不上。
