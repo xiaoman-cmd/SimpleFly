@@ -255,7 +255,13 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
                            @"LogMisses":        @NO,
                            /* 输出模式（0.5.6）：YES = 所有上屏文字转繁体（单字映射）。
                             * 给「想直接打繁体」的场景 —— 不用打完再 Ctrl+Shift+F 全选转换。 */
-                           @"OutputTrad":       @NO }];
+                           @"OutputTrad":       @NO,
+                           /* 候选窗底部编码提示（0.6.3）：YES 时候选文字底下多显示一行
+                            * 「当前高亮候选」的完整音形码（如 好 → hc·nz），随方向键移动而变；
+                            * 标点候选没有编码，该行自动隐藏。
+                            *   defaults write com.simplefly.inputmethod.SimpleFly CodeHint -bool YES
+                            * 即时生效，不用重启输入法。 */
+                           @"CodeHint":         @NO }];
 
     _autoCommit4     = [d boolForKey:@"AutoCommit4"];
     _completion      = [d boolForKey:@"EnableCompletion"];
@@ -294,10 +300,20 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
 }
 
 /* IMK 通过 updateComposition 取这个串发给客户端（内部就是 setMarkedText:）。
- * 返回空串即「清掉内嵌编码」。 */
-- (id)composedString:(id)sender
+ * 返回空串即「清掉内嵌编码」。
+ * 标点多候选态也占住组词态：内嵌显示当前高亮的标点。
+ * 这不是装饰 —— 没有组词态（marked text）时，客户端对方向键这类「导航键」
+ * 根本不转发给输入法（打字能进缓冲是因为文本键永远先问输入法，
+ * 而导航键只在有组词时才进同一条链路），表现就是「标点候选不能用方向键选」。
+ * 占住组词态后，标点候选与码表候选走完全相同的事件路由（0.6.2 修 Intel 机实测问题）。 */
+- (id)composedString:(__unsafe_unretained id)sender
 {
-    (void)sender;
+    /* sender 必须 __unsafe_unretained：IMK 的 updateComposition 传进来的 sender
+     * 是无效指针（0.6.1 里 clang 因参数未被使用而消除了入口 retain，所以从没暴露；
+     * 0.6.2 加了分支后 clang 保留了参数 → objc_retain(垃圾) → 每次组词刷新必崩，
+     * 表现就是「只能输入英文」）。ARC 下不接管它的生命周期即可。 */
+    if (_mode == SFPickPunct && _sel < _cands.count)
+        return [_cands[_sel].text copy];
     return _code ?: @"";
 }
 
@@ -675,6 +691,18 @@ static NSScreen *SFScreenForRect(NSRect r)
            accent:_outputTrad client:sender];
 }
 
+/* 候选窗底部编码提示 开/关（Ctrl+Shift+H，0.6.3）。
+ * 开关值在 showPanelWithClient 实时读，这里只翻 defaults + HUD 确认 ——
+ * 下一个候选窗立即生效，正在弹着的候选窗不动（等下次刷新自然变）。 */
+- (void)toggleCodeHint:(id)sender
+{
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    BOOL on = ![d boolForKey:@"CodeHint"];
+    [d setBool:on forKey:@"CodeHint"];
+    [self showHUD:(on ? @"编码提示：开" : @"编码提示：关")
+           accent:on seconds:1.0 client:sender];
+}
+
 #pragma mark WebDAV 同步（0.5.8，手动）
 
 /* 把 phrase.txt（自定义短语）+ freq.txt（重码记忆）同步到任意 WebDAV 网盘。
@@ -970,6 +998,17 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
 {
     NSMenu *m = [[NSMenu alloc] initWithTitle:@"SimpleFly"];
 
+    /* 候选窗底部编码提示：带当前状态，点击翻转（等价 Ctrl+Shift+H） */
+    BOOL hintOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"];
+    NSMenuItem *hint = [[NSMenuItem alloc] initWithTitle:
+                            [NSString stringWithFormat:@"候选窗编码提示 %@（⌃⇧H）",
+                             hintOn ? @"开 ✓" : @"关"]
+                                                     action:@selector(menuToggleCodeHint:)
+                                              keyEquivalent:@"h"];
+    hint.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagShift;
+    hint.target = self;
+    [m addItem:hint];
+
     NSMenuItem *up = [[NSMenuItem alloc] initWithTitle:@"同步到网盘（短语·重码记忆）"
                                                 action:@selector(menuWebDAVSyncUp:)
                                          keyEquivalent:@"u"];
@@ -995,6 +1034,13 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     /* ARC 下非 init/copy 族方法返回新造对象会自动按 +0 约定 autorelease，
      * 直接 return 即可，不需要也不允许显式 autorelease。 */
     return m;
+}
+
+- (void)menuToggleCodeHint:(id)sender
+{
+    id client = [sender isKindOfClass:[NSDictionary class]]
+                ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
+    [self toggleCodeHint:client ?: sender];
 }
 
 - (void)menuWebDAVSyncUp:(id)sender
@@ -1079,6 +1125,12 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
 - (void)showPanelWithClient:(id)sender
 {
     if (_cands.count == 0) { [_panel hide]; return; }
+    /* 底部编码提示（CodeHint，0.6.3）：这里**实时读**开关 —— 改 defaults 后
+     * 下一个候选窗立即生效，不用切走切回。内容 = 当前高亮候选的音形码，
+     * moveSelection 走回这里时随高亮一起刷新；noteForText 返回 nil（标点等）
+     * 时行自动消失。 */
+    BOOL hintOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"];
+    _panel.codeHint = hintOn ? [self noteForText:_cands[_sel].text] : nil;
     [_panel showCandidates:_cands
                       code:(_inlinePreedit ? @"" : _code)
                   selected:_sel
@@ -1095,6 +1147,10 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     s %= (NSInteger)n;
     if (s < 0) s += (NSInteger)n;
     _sel = (NSUInteger)s;
+
+    /* 标点候选态的内嵌预览跟着高亮走；码表候选的 marked text 就是编码本身，
+     * 移动高亮不改它，不在这里多刷一次（避免部分客户端 marked text 闪动）。 */
+    if (_mode == SFPickPunct) [self updateComposition];
 
     [self showPanelWithClient:sender];
 }
@@ -1303,6 +1359,10 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     _cands = items;
     _sel   = 0;
     _mode  = SFPickPunct;
+    /* 占住组词态（见 composedString: 的注释）：内嵌显示高亮标点，
+     * 让方向键事件与码表候选同链路送达，面板定位也拿得到真实 rect。 */
+    _composing = YES;
+    [self updateComposition];
     [self showPanelWithClient:sender];
     return YES;
 }
@@ -1438,6 +1498,10 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     }
     if (ctrl && shift && !cmd && !opt && kc == kVK_ANSI_D) {
         [self webdavSyncDown:sender];     /* Ctrl+Shift+D：从云端下载恢复 */
+        return YES;
+    }
+    if (ctrl && shift && !cmd && !opt && kc == kVK_ANSI_H) {
+        [self toggleCodeHint:sender];   /* Ctrl+Shift+H：候选窗底部编码提示 开/关 */
         return YES;
     }
     if (ctrl && !cmd && !opt && kc == kVK_ANSI_Semicolon) {
@@ -1581,8 +1645,14 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     }
 
     /* 分号次选 —— 对应官方 key_binder 的 {accept: semicolon, send: 2, when: has_menu}。
-     * 分号同时是编码首字符（音形用），所以仅当「已在组字且缓冲不以 ; 开头」时才当次选。 */
-    if (ch == ';' && _cands.count > 1 && _code.length > 0 && ![_code hasPrefix:@";"]) {
+     * 码表态：分号同时是编码首字符（音形用），仅当「已在组字且缓冲不以 ; 开头」时才当次选；
+     * 例外：缓冲恰好是 ";"（单敲 ; 的 ：/；两候选菜单）时也当次选 —— ";;" 不是合法编码，
+     * 与快符 ;x 无冲突；;x 快符菜单（_code = ";x"）仍排除。
+     * 标点候选态：缓冲本来就是空的，与 ; 编码不存在冲突，直接当次选（0.6.2 补，
+     * 此前条件要求 _code 非空，标点态永远不成立，; 还会落到编码路径把标点面板顶掉）。 */
+    if (ch == ';' && _cands.count > 1 &&
+        (_mode == SFPickPunct || [_code isEqualToString:@";"] ||
+         (_code.length > 0 && ![_code hasPrefix:@";"]))) {
         [self commitCandidateAtIndex:1 client:sender];
         return YES;
     }

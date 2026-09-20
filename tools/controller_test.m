@@ -398,6 +398,21 @@ static void test_select(void)
     Type(';', 0);
     CHECK([gClient.output isEqualToString:second], "分号 = 次选：%s", CStr(gClient.output));
 
+    /* 单敲 ; 的候选菜单（：/；+ 补全带出的快符，不止 2 个）：; 是次选（0.6.2 补：
+     * 缓冲恰为 ";" 时放行，";;" 不是合法编码、与快符 ;x 无冲突；
+     * 此前被 hasPrefix:@";" 挡住落到编码路径）。 */
+    Fresh();
+    Type(';', 0);
+    NSUInteger semiN = CandsCount();
+    CHECK(semiN >= 2, "单敲 ; 至少 2 个候选（%lu）", (unsigned long)semiN);
+    if (semiN >= 2) {
+        NSString *semiSecond = ((SFCandidate *)Cands()[1]).text;
+        Type(';', 0);
+        CHECK([gClient.output isEqualToString:semiSecond],
+              "单敲 ; 再按 ; = 第 2 候选：%s", CStr(gClient.output));
+        CHECK(BoolIvar(gCtl, "_composing") == NO, "上屏后组词态结束");
+    }
+
     Fresh();
     TypeString(code.UTF8String);
     BOOL handled = TypeKey(kVK_Return, 0);
@@ -815,12 +830,71 @@ static void test_punct_arrow_selection(void)
     NSUInteger n = CandsCount();
     CHECK(n >= 2, "[ 有多个候选（%lu）", (unsigned long)n);
 
+    /* 0.6.2：标点候选态必须占住组词态（marked text），否则真机上客户端
+     * 不把方向键这类导航键转发给输入法 —— Intel 机实测踩过。 */
+    CHECK(BoolIvar(gCtl, "_composing") == YES, "标点候选态占住组词态");
+    NSString *first = ((SFCandidate *)Cands()[0]).text;
+    CHECK([[gCtl composedString:nil] isEqualToString:first],
+          "内嵌预览 = 高亮项（第 1 个）：%s", CStr([gCtl composedString:nil]));
+
     NSString *second = ((SFCandidate *)Cands()[1]).text;
     TypeKey(kVK_RightArrow, 0);
     CHECK(IntIvar(gCtl, "_sel") == 1, "→ 高亮移到第 2 项");
+    CHECK([[gCtl composedString:nil] isEqualToString:second],
+          "内嵌预览跟着高亮走（第 2 个）：%s", CStr([gCtl composedString:nil]));
     Type(' ', 0);
     CHECK([gClient.output isEqualToString:second],
           "空格上屏标点候选的高亮项：%s", CStr(gClient.output));
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "上屏后组词态结束");
+
+    /* 分号次选对标点候选态同样生效（0.6.2 补：此前要求 _code 非空，
+     * 标点态永远不成立，; 会落到编码路径把标点面板顶掉）。 */
+    Fresh();
+    CHECK(Type('[', 0) == YES, "[ 被消费");
+    CHECK(IntIvar(gCtl, "_mode") == 2, "进入标点候选态");
+    NSString *secondBrk = ((SFCandidate *)Cands()[1]).text;
+    Type(';', 0);
+    CHECK([gClient.output isEqualToString:secondBrk],
+          "标点态分号 = 第 2 候选：%s", CStr(gClient.output));
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "上屏后组词态结束");
+}
+
+static void test_punct_composition_discard(void)
+{
+    puts("\n== 标点候选态的组词退出路径 ==");
+    /* Esc：组词态一起清掉 */
+    Fresh();
+    Type('[', 0);
+    CHECK(BoolIvar(gCtl, "_composing") == YES, "进入标点候选态（占住组词）");
+    TypeKey(kVK_Escape, 0);
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "Esc 清掉组词态");
+    CHECK([[gCtl composedString:nil] length] == 0, "Esc 后内嵌预览为空");
+    CHECK(gClient.output.length == 0, "Esc 放弃不上屏");
+
+    /* 退格：同 Esc */
+    Fresh();
+    Type('[', 0);
+    TypeKey(kVK_Delete, 0);
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "退格清掉组词态");
+    CHECK(gClient.output.length == 0, "退格放弃不上屏");
+
+    /* 单候选 / 成对引号不占组词态（直接上屏） */
+    Fresh();
+    Type(',', 0);
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "单候选标点不占组词态");
+    Fresh();
+    Type('\'', 0);
+    CHECK(BoolIvar(gCtl, "_composing") == NO, "成对引号不占组词态");
+
+    /* 标点候选态下再按别的标点键：先清旧组词再处理新键，不残留 */
+    Fresh();
+    Type('[', 0);
+    Type('$', 0);
+    CHECK(IntIvar(gCtl, "_mode") == 2, "切到 $ 的候选态");
+    CHECK(BoolIvar(gCtl, "_composing") == YES, "新候选态仍占住组词");
+    NSString *dollarFirst = ((SFCandidate *)Cands()[0]).text;
+    CHECK([[gCtl composedString:nil] isEqualToString:dollarFirst],
+          "内嵌预览换成 $ 的首选：%s", CStr([gCtl composedString:nil]));
 }
 
 #pragma mark - 查编码
@@ -949,6 +1023,14 @@ static SFCandidatePanel *Panel(void)
 
 static NSString *ThemeName(void) { return (NSString *)ObjIvar(gCtl, "_themeName"); }
 
+/* test_code_hint 里用到、但定义在更后面的符号 —— 前置声明 */
+static NSString *HUDText(void);
+
+/* 控制器私有方法没有公开头文件，测试直接调要自己补声明 */
+@interface SimpleFlyInputController (TestOnly)
+- (void)menuToggleCodeHint:(id)sender;
+@end
+
 static void test_theme(void)
 {
     puts("\n== 主题：Ctrl+; 循环切换 ==");
@@ -995,6 +1077,110 @@ static void test_theme(void)
     Fresh();
     CHECK([Panel().theme.name isEqualToString:@"metro"], "未知主题名退回 metro（%s）",
           CStr(Panel().theme.name));
+
+    /* --- 0.6.2 新增的 5 套鼠须管官方配色：名字齐全 + BGR/RGB 换算防呆 --- */
+    CHECK(names.count == 8, "内置 8 套主题（%lu）", (unsigned long)names.count);
+    for (NSString *t in @[@"aqua", @"luna", @"ink", @"google", @"mojave_dark"]) {
+        SFCandidateTheme *th = [SFCandidateTheme themeNamed:t];
+        CHECK([th.name isEqualToString:t], "主题 %s 存在", t.UTF8String);
+    }
+    /* Rime 官方色值是 BGR，抄表时换算错位会让红蓝对调 ——
+     * aqua/google/mojave_dark 的高亮块/底色都是蓝系，蓝分量必须大于红分量。 */
+    SFCandidateTheme *aqua = [SFCandidateTheme themeNamed:@"aqua"];
+    CHECK(aqua.selBack.blueComponent > aqua.selBack.redComponent, "aqua 高亮是蓝系（BGR 换算正确）");
+    CHECK(aqua.back.alphaComponent < 1.0, "aqua 背板半透明（alpha %.2f）", aqua.back.alphaComponent);
+    SFCandidateTheme *luna = [SFCandidateTheme themeNamed:@"luna"];
+    CHECK(luna.back.alphaComponent < 1.0, "luna 背板半透明（alpha %.2f）", luna.back.alphaComponent);
+    CHECK(luna.selBack.alphaComponent < 0.5, "luna 高亮块是 25% 黑");
+    SFCandidateTheme *goog = [SFCandidateTheme themeNamed:@"google"];
+    CHECK(goog.selBack.blueComponent > goog.selBack.redComponent, "google 高亮是蓝系");
+    SFCandidateTheme *mjdk = [SFCandidateTheme themeNamed:@"mojave_dark"];
+    CHECK(mjdk.back.blueComponent > mjdk.back.redComponent, "mojave_dark 底色偏蓝灰");
+}
+
+/* 底部编码提示（CodeHint，0.6.3）：候选窗文字底下显示当前高亮候选的音形码。
+ * 开关在 showPanelWithClient 实时读，所以这里 setBool 后立刻 Fresh 就能测到。 */
+static void test_code_hint(void)
+{
+    puts("\n== 候选窗底部编码提示（CodeHint） ==");
+
+    /* 自己算「期望的编码文本」，不写死编码（教训见文件头）：
+     * 与控制器 noteForText 同一套规则 —— 单字在音码 2 位后插中点，词语原样。 */
+    NSString *code = FindCode(1);
+    if (!code) { CHECK(NO, "找不到可测编码"); return; }
+    NSString *want0 = Cand(code.UTF8String, 0);
+    NSString *note0 = nil;
+    {
+        const char *c = sf_engine_code_for_text(SFSharedEngine(), want0.UTF8String);
+        if (c) {
+            NSString *raw = [NSString stringWithUTF8String:c];
+            note0 = (want0.length == 1 && raw.length > 2)
+                  ? [NSString stringWithFormat:@"%@·%@", [raw substringToIndex:2],
+                                                       [raw substringFromIndex:2]]
+                  : raw;
+        }
+    }
+
+    /* --- 默认关：不出提示行 --- */
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
+    Fresh();
+    TypeString(code.UTF8String);
+    CHECK(CandsCount() > 0, "出候选");
+    CHECK([Panel() codeHint] == nil, "默认关：无编码提示");
+
+    /* --- 打开：提示 = 高亮候选的音形码，且同步到了绘制视图 --- */
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"CodeHint"];
+    Fresh();
+    TypeString(code.UTF8String);
+    CHECK([Panel() codeHint] != nil, "打开后出现编码提示");
+    if (note0) CHECK([[Panel() codeHint] isEqualToString:note0],
+                     "内容 = 首选的音形码（%s）", CStr(Panel().codeHint));
+    id view = ObjIvar(Panel(), "_view");
+    CHECK([view codeHint] != nil && [[view codeHint] isEqualToString:[Panel() codeHint]],
+          "提示同步到了绘制视图");
+    TypeKey(kVK_RightArrow, 0);
+    if (CandsCount() > 1) {
+        NSString *want1 = ((SFCandidate *)Cands()[1]).text;
+        const char *c1 = sf_engine_code_for_text(SFSharedEngine(), want1.UTF8String);
+        if (c1) {
+            NSString *raw1 = [NSString stringWithUTF8String:c1];
+            NSString *note1 = (want1.length == 1 && raw1.length > 2)
+                  ? [NSString stringWithFormat:@"%@·%@", [raw1 substringToIndex:2],
+                                                       [raw1 substringFromIndex:2]]
+                  : raw1;
+            CHECK([[Panel() codeHint] isEqualToString:note1],
+                  "方向键后提示 = 第 2 候选的音形码（%s）", CStr(Panel().codeHint));
+        }
+    }
+
+    /* --- 标点候选没有编码：行自动消失 --- */
+    Fresh();
+    Type('[', 0);
+    CHECK(Panel().codeHint == nil, "标点候选无编码，不出提示行");
+
+    /* --- 收尾：恢复默认关 --- */
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
+    Fresh();
+    TypeString(code.UTF8String);
+    CHECK(Panel().codeHint == nil, "关闭后恢复无提示");
+
+    /* --- 快捷键 Ctrl+Shift+H：翻转 defaults + HUD 确认（0.6.3） --- */
+    NSEventModifierFlags mods = NSEventModifierFlagControl | NSEventModifierFlagShift;
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
+    Fresh();
+    CHECK(TypeKey(kVK_ANSI_H, mods) == YES, "Ctrl+Shift+H 被输入法消费");
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"] == YES,
+          "快捷键把开关翻到开");
+    CHECK([HUDText() containsString:@"编码提示"], "HUD 确认：%s", CStr(HUDText()));
+    TypeKey(kVK_ANSI_H, mods);
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"] == NO,
+          "再按一次翻回关");
+
+    /* --- 菜单项路由（menu action 传字典，须从 kIMKCommandClientName 取 client） --- */
+    [gCtl menuToggleCodeHint:@{}];
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"] == YES,
+          "菜单项路由也能翻转开关");
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
 }
 
 #pragma mark - 重码记忆
@@ -1346,20 +1532,31 @@ static void test_webdav_sync(void)
     CHECK(TypeKey(kVK_ANSI_D, mods) == YES, "Ctrl+Shift+D 被输入法消费");
     CHECK([HUDText() containsString:@"未配置网盘"], "恢复键同样给引导提示：%s", CStr(HUDText()));
 
-    /* 状态栏菜单：三项、动作选择器正确、target 指向控制器 */
+    /* 状态栏菜单：四项（0.6.3 起第 1 项是编码提示开关）、动作选择器正确、target 指向控制器 */
     NSMenu *m = [gCtl menu];
-    CHECK(m != nil && m.numberOfItems == 3, "菜单有三项（实际 %lu）",
+    CHECK(m != nil && m.numberOfItems == 4, "菜单有四项（实际 %lu）",
           (unsigned long)(m ? m.numberOfItems : 0));
     if (!m) return;
-    CHECK([m itemAtIndex:0].action == @selector(menuWebDAVSyncUp:) &&
-          [m itemAtIndex:0].target == gCtl, "第一项 = 同步到网盘");
-    CHECK([m itemAtIndex:1].action == @selector(menuWebDAVSyncDown:) &&
-          [m itemAtIndex:1].target == gCtl, "第二项 = 从网盘恢复");
-    CHECK([m itemAtIndex:2].action == @selector(menuWebDAVConfig:) &&
-          [m itemAtIndex:2].target == gCtl, "第三项 = 网盘配置…");
-    CHECK([[m itemAtIndex:0].title containsString:@"同步"] &&
-          [[m itemAtIndex:1].title containsString:@"恢复"] &&
-          [[m itemAtIndex:2].title containsString:@"网盘配置"], "标题用中文动词，不写术语");
+    CHECK([m itemAtIndex:0].action == @selector(menuToggleCodeHint:) &&
+          [m itemAtIndex:0].target == gCtl, "第一项 = 编码提示开关");
+    CHECK([m itemAtIndex:1].action == @selector(menuWebDAVSyncUp:) &&
+          [m itemAtIndex:1].target == gCtl, "第二项 = 同步到网盘");
+    CHECK([m itemAtIndex:2].action == @selector(menuWebDAVSyncDown:) &&
+          [m itemAtIndex:2].target == gCtl, "第三项 = 从网盘恢复");
+    CHECK([m itemAtIndex:3].action == @selector(menuWebDAVConfig:) &&
+          [m itemAtIndex:3].target == gCtl, "第四项 = 网盘配置…");
+    CHECK([[m itemAtIndex:0].title containsString:@"编码提示"] &&
+          [[m itemAtIndex:1].title containsString:@"同步"] &&
+          [[m itemAtIndex:2].title containsString:@"恢复"] &&
+          [[m itemAtIndex:3].title containsString:@"网盘配置"], "标题用中文动词，不写术语");
+    /* 菜单项标题反映当前开关状态（默认关） */
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
+    CHECK([[[gCtl menu] itemAtIndex:0].title containsString:@"关"],
+          "关状态：菜单标题显示「关」");
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"CodeHint"];
+    CHECK([[[gCtl menu] itemAtIndex:0].title containsString:@"开"],
+          "开状态：菜单标题显示「开」");
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
 }
 
 static void test_webdav_config_file(void)
@@ -1631,6 +1828,7 @@ int main(int argc, char **argv)
         test_caret_position();
         test_arrow_selection();
         test_punct_arrow_selection();
+        test_punct_composition_discard();
         test_freq_memory();         /* 用临时 freq 文件，放 phrase 之前不互相污染 */
         test_lookup_selection();
         test_miss_log();
@@ -1640,6 +1838,7 @@ int main(int argc, char **argv)
         test_webdav_config_file();
         test_reverse_mode();
         test_theme();
+        test_code_hint();
         test_custom_phrase();       /* 放最后：它会写短语表，可能影响空码判断 */
 
         RestoreDefaults();

@@ -29,6 +29,7 @@ static const CGFloat kCodeGap = 8.0;    /* squirrel.yaml style.spacing：编码�
 static const NSUInteger kSFGridCols = 9;  /* 每行几个候选（对应数字键 1-9） */
 static const CGFloat kRowGap    = 2.0;    /* 行间距 */
 static const CGFloat kHeaderGap = 6.0;    /* 页眉和第一行之间 */
+static const CGFloat kHintGap   = 4.0;    /* 候选区与底部编码提示行之间 */
 static const CGFloat kHUDPadX = 12.0;
 static const CGFloat kHUDPadY = 6.0;
 static const NSTimeInterval kHUDSeconds = 1.0;
@@ -55,6 +56,7 @@ static const NSTimeInterval kHUDSeconds = 1.0;
 @property (nonatomic, assign) NSUInteger selectedIndex;   /* 方向键移动的就是它 */
 @property (nonatomic, copy) NSString *hud;      /* 非空时只画模式提示 */
 @property (nonatomic, assign) BOOL hudAccent;
+@property (nonatomic, copy) NSString *codeHint; /* 非空时候选区底下整行显示该编码 */
 @property (nonatomic, strong) SFCandidateTheme *theme;     /* 当前配色主题 */
 - (NSSize)desiredSize;
 @end
@@ -85,9 +87,15 @@ static const NSTimeInterval kHUDSeconds = 1.0;
                                              NSForegroundColorAttributeName: self.theme.note }; }
 - (NSDictionary *)selNoteAttrs   { return @{ NSFontAttributeName: SFMetroFont(13),
                                              NSForegroundColorAttributeName: self.theme.selNote }; }
-- (NSDictionary *)hudAttrs       { return @{ NSFontAttributeName: SFMetroFont(14),
-                                             NSForegroundColorAttributeName:
-                                                 (self.hudAccent ? self.theme.selBack : self.theme.codeText) }; }
+- (NSDictionary *)hudAttrs
+{
+    /* hudAccent 用高亮块的强调色当前景；但半透明主题（luna 等）的 selBack alpha 很低，
+     * 当文字色会在 HUD 底上隐形 —— alpha < 0.5 时退用高亮文字色。 */
+    NSColor *accent = self.theme.selBack;
+    if (accent.alphaComponent < 0.5) accent = self.theme.selText;
+    return @{ NSFontAttributeName: SFMetroFont(14),
+              NSForegroundColorAttributeName: (self.hudAccent ? accent : self.theme.codeText) };
+}
 
 /* metro 的 candidate_format 是 "%c\u2005%@\u2005"，即
  *   编号 + 1/6em 空格 + 词条 + 1/6em 空格
@@ -192,7 +200,16 @@ static const NSTimeInterval kHUDSeconds = 1.0;
 
     CGFloat h = header + rows.count * [self rowHeight]
               + (rows.count - 1) * kRowGap + kPadY * 2;
-    return NSMakeSize(w, h);
+
+    /* 底部编码提示行（CodeHint 开关打开且控制器给出了编码时出现） */
+    CGFloat hintH = 0;
+    if (self.codeHint.length > 0) {
+        CGFloat hw = [self.codeHint sizeWithAttributes:self.codeAttrs].width;
+        w = MAX(w, kPadX + hw + kPadX);
+        hintH = kHintGap + [self headerHeight];
+    }
+
+    return NSMakeSize(w, h + hintH);
 }
 
 - (void)drawBackground
@@ -276,6 +293,20 @@ static const NSTimeInterval kHUDSeconds = 1.0;
         }
         y += rowH + kRowGap;
     }
+
+    /* 底部编码提示：当前**高亮候选**的完整音形码，随方向键移动而变。
+     * 上面是候选行、下面一条 hairline 隔开 —— 「文字底下显示编码」。 */
+    if (self.codeHint.length > 0) {
+        CGFloat lineY = y + kHintGap / 2.0;
+        NSRect line = NSMakeRect(kPadX, lineY, self.bounds.size.width - kPadX * 2, 0.5);
+        NSBezierPath *sep = [NSBezierPath bezierPathWithRect:line];
+        sep.lineWidth = 0.5;
+        [self.theme.hairline setStroke];
+        [sep stroke];
+
+        [self.codeHint drawAtPoint:NSMakePoint(kPadX, lineY + kHintGap / 2.0)
+                    withAttributes:self.codeAttrs];
+    }
 }
 
 @end
@@ -286,6 +317,13 @@ static const NSTimeInterval kHUDSeconds = 1.0;
     NSPanel *_panel;
     SFCandidateView *_view;
     NSTimer *_hideTimer;
+}
+
+/* 底部编码提示。非空时候选窗底下多一行显示它（控制器按 CodeHint 开关算好传入）。 */
+- (void)setCodeHint:(NSString *)codeHint
+{
+    _codeHint = [codeHint copy];
+    _view.codeHint = _codeHint;
 }
 
 #pragma mark 分页（纯计算，单测直接调）
@@ -380,6 +418,7 @@ static const NSTimeInterval kHUDSeconds = 1.0;
     _view.candidates = candidates;
     /* 越界一律夹回合法范围 —— 调用方在「候选变少」时不必自己记得重置 */
     _view.selectedIndex = MIN(selected, candidates.count - 1);
+    _view.codeHint = _codeHint ?: nil;   /* 每次显示前同步（setCodeHint 已存） */
 
     [self presentAtTopLeft:topLeft];
 }
@@ -396,6 +435,7 @@ static const NSTimeInterval kHUDSeconds = 1.0;
     _view.code = @"";
     _view.candidates = @[];
     _view.selectedIndex = 0;
+    _view.codeHint = nil;   /* HUD 模式不画编码行 */
 
     [self presentAtTopLeft:topLeft];
 

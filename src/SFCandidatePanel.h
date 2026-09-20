@@ -31,6 +31,10 @@ NS_ASSUME_NONNULL_BEGIN
  *  每次显示候选 / HUD 前会同步给内部绘制视图，所以赋值后下一次绘制即生效。 */
 @property (nonatomic, strong) SFCandidateTheme *theme;
 
+/*! 底部编码提示行：非空时候选窗文字底下多显示一行这个小字（当前高亮候选的音形码）。
+ *  控制器按 CodeHint 开关算好传入；空/nil = 不显示（高度还原）。HUD 模式自动隐藏。 */
+@property (nonatomic, copy, nullable) NSString *codeHint;
+
 /*! 候选窗一页放几条 —— 3 行 × 9 列 = 27。
  *
  * 普通组字最多 9 条（码表一次就查这么多），永远只有一页；
