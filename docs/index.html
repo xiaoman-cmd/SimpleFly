@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SimpleFly · macOS 小鹤双拼/音形输入法</title>
+<meta name="description" content="SimpleFly：最小可用的 macOS 小鹤双拼/音形输入法，纯 C 引擎 + InputMethodKit，只需 Command Line Tools 即可编译。">
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --border: #30363d;
+    --fg: #e6edf3;
+    --fg-dim: #8b949e;
+    --accent: #f6682f;        /* 小鹤橙 */
+    --accent-soft: rgba(246,104,47,.12);
+    --green: #3fb950;
+    --red: #f85149;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- nav ---- */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(13,17,23,.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
+  nav .logo { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+  nav .logo .mark {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: var(--accent); color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 800;
+  }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14.5px; }
+  nav .links a { color: var(--fg-dim); }
+  nav .links a:hover { color: var(--fg); text-decoration: none; }
+
+  /* ---- hero ---- */
+  header { padding: 88px 0 64px; text-align: center; }
+  header h1 { font-size: 52px; line-height: 1.15; letter-spacing: -1px; }
+  header h1 .accent { color: var(--accent); }
+  header .sub {
+    margin: 20px auto 0; max-width: 640px;
+    color: var(--fg-dim); font-size: 19px;
+  }
+  header .badges { margin-top: 28px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .badge {
+    font-size: 13px; padding: 5px 13px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--bg-soft); color: var(--fg-dim);
+  }
+  .badge b { color: var(--fg); font-weight: 600; }
+  .cta { margin-top: 36px; display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 11px 26px; border-radius: 9px;
+    font-weight: 600; font-size: 15.5px; transition: transform .12s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { border: 1px solid var(--border); color: var(--fg); background: var(--bg-soft); }
+
+  .term {
+    margin: 48px auto 0; max-width: 560px; text-align: left;
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.4);
+  }
+  .term .bar { display: flex; gap: 6px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .term .bar i { width: 11px; height: 11px; border-radius: 50%; background: #30363d; }
+  .term .bar i:nth-child(1) { background: #ff5f57; } .term .bar i:nth-child(2) { background: #febc2e; } .term .bar i:nth-child(3) { background: #28c840; }
+  .term pre { padding: 18px 20px; font-family: var(--mono); font-size: 13.5px; line-height: 1.9; overflow-x: auto; }
+  .term .cmt { color: var(--fg-dim); }
+  .term .cmd { color: var(--green); }
+
+  /* ---- sections ---- */
+  section { padding: 64px 0; border-top: 1px solid var(--border); }
+  h2 { font-size: 30px; margin-bottom: 10px; }
+  .sec-sub { color: var(--fg-dim); margin-bottom: 36px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px 22px 18px; transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--accent); }
+  .card .ico { font-size: 24px; }
+  .card h3 { font-size: 17px; margin: 10px 0 6px; }
+  .card p { font-size: 14.5px; color: var(--fg-dim); }
+  .card p code, td code, li code {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--accent-soft); color: var(--accent);
+    padding: 1.5px 6px; border-radius: 5px;
+  }
+
+  /* ---- key table ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--fg-dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .5px; }
+  td kbd {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--bg-soft); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+  }
+  .tbl-note { color: var(--fg-dim); font-size: 13.5px; margin-top: 16px; }
+
+  /* ---- not-list ---- */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .duo .card ul { list-style: none; margin-top: 6px; }
+  .duo .card li { font-size: 14.5px; color: var(--fg-dim); padding: 4px 0; }
+  .duo .ok h3 { color: var(--green); } .duo .no h3 { color: var(--red); }
+  @media (max-width: 640px) { .duo { grid-template-columns: 1fr; } }
+
+  /* ---- theme banner ---- */
+  .theme-banner {
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    background: var(--bg-soft);
+  }
+  .theme-banner img { display: block; width: 100%; height: auto; }
+  .theme-banner figcaption { padding: 12px 18px; color: var(--fg-dim); font-size: 13.5px; border-top: 1px solid var(--border); }
+
+  /* ---- disclaimer ---- */
+  .disclaimer {
+    background: rgba(248,81,73,.07); border: 1px solid rgba(248,81,73,.35);
+    border-radius: 12px; padding: 22px 26px; font-size: 14.5px;
+  }
+  .disclaimer p { color: var(--fg-dim); margin-top: 8px; }
+  .disclaimer p:first-of-type { margin-top: 10px; }
+  .disclaimer strong { color: var(--fg); }
+
+  footer { border-top: 1px solid var(--border); padding: 36px 0 48px; color: var(--fg-dim); font-size: 13.5px; text-align: center; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <span class="logo"><span class="mark">飞</span>SimpleFly</span>
+    <div class="links">
+      <a href="#features">特性</a>
+      <a href="#keys">键位</a>
+      <a href="#themes">主题</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="https://github.com/xiaoman-cmd/SimpleFly">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<header class="wrap">
+  <h1>macOS 上的<br><span class="accent">小鹤双拼 / 音形</span>输入法</h1>
+  <p class="sub">自家实现的输入引擎（纯 C）+ InputMethodKit 前端。不用 Xcode 工程，一台装了 Command Line Tools 的 Mac 就能编译出能真正打字的输入法。</p>
+  <div class="badges">
+    <span class="badge">版本 <b>0.8.1</b>（build 42）</span>
+    <span class="badge">引擎 <b>纯 C</b></span>
+    <span class="badge">零第三方依赖</span>
+    <span class="badge">macOS 原生 IMK</span>
+  </div>
+  <div class="cta">
+    <a class="btn btn-primary" href="#quickstart">五分钟上手</a>
+    <a class="btn btn-ghost" href="https://github.com/xiaoman-cmd/SimpleFly">查看源码</a>
+  </div>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i></div>
+    <pre><span class="cmt"># 编译 + 组装 .app + ad-hoc 签名（几秒）</span>
+<span class="cmd">./build.sh</span>
+<span class="cmt"># 自检：码表读得到吗</span>
+<span class="cmd">./build/SimpleFly.app/Contents/MacOS/SimpleFly --check</span>
+<span class="cmt"># 装到 ~/Library/Input Methods/</span>
+<span class="cmd">./install.sh</span></pre>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>它有什么</h2>
+    <p class="sec-sub">双拼音码查字、音形 4 码定字、四键唯一即上屏 —— 与官方 flypy.schema.yaml 逐条对齐。</p>
+    <div class="grid">
+      <div class="card"><div class="ico">⚙️</div><h3>引擎与界面分离</h3><p>引擎是纯 C，查询 0.2 µs/次；可以脱离输入法在命令行跑单测，727 项断言守护按键行为。</p></div>
+      <div class="card"><div class="ico">⌨️</div><h3>方向键选候选</h3><p><code>↑ ↓ ← →</code> 四个键都当一维移动、两端回绕；没在组字时照旧放行给应用移动光标。</p></div>
+      <div class="card"><div class="ico">🔎</div><h3>查编码模式</h3><p><code>Ctrl+/</code> 输全拼或双拼码反查，候选直接标出音形码拆分（好 = hc·nz），支持词语，连着打不用退出。</p></div>
+      <div class="card"><div class="ico">✂️</div><h3>自定义短语</h3><p>一行一条绑到任意短编码，永远排第一候选，改完文件立即生效，不会误触发四键上屏。</p></div>
+      <div class="card"><div class="ico">🎪</div><h3>13 套候选窗主题</h3><p><code>Ctrl+;</code> 循环切换，或菜单里直接挑，末条「跟随系统亮暗」；底部可显编码提示。</p></div>
+      <div class="card"><div class="ico">🔥</div><h3>重码记忆</h3><p>上次选过的词下次排第一。码 → 词单值记忆，纯文本可手改，30 天过期。</p></div>
+      <div class="card"><div class="ico">☁️</div><h3>WebDAV 同步</h3><p>词库、短语、记忆两键推上任意网盘，换机整体覆盖恢复，不走任何第三方服务器。</p></div>
+      <div class="card"><div class="ico">🚀</div><h3>一键自更新</h3><p>输入法菜单顶项直接更新到最新版本，源码 / 预编译双模式，不覆盖用户配置。</p></div>
+      <div class="card"><div class="ico">∝</div><h3>快符与符号</h3><p><code>;a</code> → ！两码直出；另含 <code>of</code> 特殊符号 676 个、emoji 313 个、引号左右交替。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="keys">
+  <div class="wrap">
+    <h2>键位速查</h2>
+    <p class="sec-sub">逐条对齐官方 schema，官方依据全部可考。</p>
+    <table>
+      <tr><th>按键</th><th>行为</th></tr>
+      <tr><td><kbd>a</kbd>–<kbd>z</kbd> <kbd>;</kbd> <kbd>'</kbd></td><td>累积编码，实时出候选</td></tr>
+      <tr><td><kbd>1</kbd>–<kbd>9</kbd> / <kbd>空格</kbd></td><td>上屏第 N 个 / 当前高亮的候选</td></tr>
+      <tr><td><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></td><td>候选里移动高亮，两端回绕；非组字时放行给应用</td></tr>
+      <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>顶屏：先把高亮候选顶上去，再打标点</td></tr>
+      <tr><td>第 4 码</td><td>精确匹配唯一时自动上屏</td></tr>
+      <tr><td><kbd>Shift</kbd>（单敲）</td><td>中 / 英一键切换</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>.</kbd> / <kbd>Shift</kbd>+<kbd>空格</kbd></td><td>中英标点切换 / 全半角切换</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>/</kbd> / <kbd>Ctrl</kbd>+<kbd>;</kbd></td><td>查编码模式 / 候选窗主题循环</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>/</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>;</kbd></td><td>选中文字查编码 / 清空重码记忆</td></tr>
+    </table>
+    <p class="tbl-note">完整键位表、标点表与官方依据逐条对照，见仓库 README。</p>
+  </div>
+</section>
+
+<section id="themes">
+  <div class="wrap">
+    <h2>候选窗主题</h2>
+    <p class="sec-sub">13 套配色按「日用 → 夜用」排列，defaults 即时生效。</p>
+    <figure class="theme-banner">
+      <img src="主题预览.png" alt="SimpleFly 候选窗主题预览" loading="lazy">
+      <figcaption>主题列表：metro / jade / blossom / linen / paper / ink / contrast / dark / mojave_dark / amber / neon / retro / luna</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="wrap">
+    <h2>快速开始</h2>
+    <p class="sec-sub">只需要 Command Line Tools（<code>xcode-select --install</code>），不需要 Xcode。</p>
+    <div class="duo">
+      <div class="card ok">
+        <h3>✅ 它是</h3>
+        <ul>
+          <li>一个能真正打字的中文输入法</li>
+          <li>双拼 + 音形，四键唯一即上屏</li>
+          <li>引擎可独立跑命令行单测</li>
+        </ul>
+      </div>
+      <div class="card no">
+        <h3>❌ 它不是</h3>
+        <ul>
+          <li>不是 Squirrel 的替代品：无整句、无用户词库、无翻页</li>
+          <li>不是可分发的产品：ad-hoc 签名，换机过不了 Gatekeeper</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="disclaimer">
+  <div class="wrap">
+    <div class="disclaimer">
+      <h2 style="font-size:20px">⚠️ 非官方声明</h2>
+      <p><strong>本项目是第三方实现，与小鹤官方（flypy.cc）无关、未获其授权。</strong>「小鹤」「小鹤音形」为权利人商标，此处仅用于指代输入方案。</p>
+      <p><strong>本仓库不分发码表。</strong>小鹤音形码表版权归小鹤官方所有，官方明确声明「任何第三方内置小鹤音形方案的行为均为侵权」。码表需自行从官方渠道获取，方法见仓库 README 的「码表」一节。许可细节见 <a href="https://github.com/xiaoman-cmd/SimpleFly/blob/main/LICENSE">LICENSE</a> 与 <a href="https://github.com/xiaoman-cmd/SimpleFly/blob/main/NOTICE">NOTICE</a>。</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    SimpleFly · 用 clang 写出来的 macOS 输入法 · <a href="https://github.com/xiaoman-cmd/SimpleFly">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>
