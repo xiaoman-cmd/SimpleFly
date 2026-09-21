@@ -10,9 +10,12 @@
 > **本仓库不分发码表** —— 小鹤音形码表版权归小鹤官方所有，官方明确声明「任何第三方内置小鹤音形方案的行为均为侵权」。
 > 码表需自行从官方渠道获取，方法见 [码表](#换码表--重新生成码表)。许可细节见 `LICENSE` 与 `NOTICE`。
 
-> 当前状态：**0.6.1**（build 22）。
+> 当前状态：**0.8.1**（build 42）。
 >
-> 在系统设置里的显示名是 **`SimpleFly`**，图标是**汉字「飞」的挖空底板**（换字见 [开发笔记](docs/开发笔记.md)「图标」）：模式图标 `SimpleFly.tiff` 用 Apple 自家规格（16×16@72dpi + 32×32 双帧 TIFF），菜单栏同样由它提供；另保留 22×16 pt 的 `SimpleFly.pdf`。细节见 [开发笔记](docs/开发笔记.md)。
+> 在系统设置里的显示名是 **`SimpleFly`**，图标是**汉字「飞」的挖空底板**（换字见 [开发笔记](docs/开发笔记.md)「图标」）。
+> **两个文件分工，别混**：菜单栏用 22×16 pt 的 `SimpleFly.pdf`（顶层 `tsInputMethodIconFileKey` + 两个 mode 级菜单键），
+> 设置列表用 Apple 同款规格的双帧 `SimpleFly.tiff`（16×16@72dpi + 32×32@144dpi，只给 `tsInputModePaletteIconFileKey`）。
+> 细节见 [开发笔记](docs/开发笔记.md)。
 >
 
 ---
@@ -398,6 +401,7 @@ killall SimpleFly                                                    # 重新加
 | `PanelOffsetX` / `PanelOffsetY` | `0` | 候选窗位置的微调量（pt）。**只救固定距离的偏** |
 | `PanelFlipY` | `NO` | 把 IMK 返回的光标矩形在屏幕上做一次 y 镜像后再定位。定位「离谱」时用（见 [开发笔记](docs/开发笔记.md)） |
 | `DebugPanelRect` | `NO` | 每次定位都把原始矩形、镜像结果、鼠标位置打到系统日志，用于一次定下原点方向 |
+| `MenuDebug` | `NO` | 菜单命令诊断日志（`~/Library/Application Support/SimpleFly/menu-debug.log`，记 selector / sender 类名 / 认领到的主题名，上限 32 KB）。**排查「菜单点了没反应」时先打开再复现**：`defaults write com.simplefly.inputmethod.SimpleFly MenuDebug -bool YES`。注意「日志一行都没写」本身就是判据（说明命令压根没回来），所以要用这条判据必须先把它打开 |
 | `FreqMemory` | `YES` | 重码记忆（见 §3）。关掉后重码永远按码表顺序；`Ctrl+Shift+;` 清空不受此开关影响 |
 | `LogMisses` | `NO` | 打错日志（见 §3）。记录「废弃的编码 → 最终上屏词」到 `mislog.tsv`，配合 `./build.sh --suggest` 生成短语建议。涉及你打了什么字，所以默认关 |
 | `CodeHint` | `NO` | 候选窗底部显示**当前高亮候选**的音形码（`Ctrl+Shift+H` 同此开关）。开关实时读取，改完下一个候选窗即生效，**不用 killall** |

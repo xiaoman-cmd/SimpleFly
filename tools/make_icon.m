@@ -180,6 +180,105 @@ struct IconOpts {
     const char *forceFont;
 };
 
+/* ---- 让 PDF 字节可复现：CGPDFContext 每次都会写当前时间 + 一个随机的 /ID ----
+ *
+ * 起因：`./build.sh` 之后 `git status` 永远显示 resources/SimpleFly.pdf 被改过，
+ * `git diff --stat` 报 `Bin 4153 -> 4155 bytes`，逐字节比却只有 60 个字节不同 ——
+ * 两处时间戳（/CreationDate、/ModDate）与 /ID 的十六进制串。图标内容一模一样，
+ * 但工作树每次都脏，很容易被当成「图标改动」提交上去（.tiff / .icns 重生成是字节
+ * 一致的，只有 PDF 带时间戳，所以只有它脏）。
+ *
+ * 做法：落盘后把这两类串**等长**覆写成固定值 ——
+ *   日期 "(D:YYYYMMDDHHmmSSZ00'00')"：覆写括号内 23 字节，日期值固定 23 字符；
+ *   /ID 的 "<32 位十六进制>"：覆写尖括号内 32 字节。
+ * 等长原地覆写不移动任何对象偏移，xref 依然有效、PDF 依然合法。
+ *
+ * 匹配得很死（日期要求 14 位数字 + "Z00'00'" 骨架，ID 要求 32 位十六进制且紧跟 ">"），
+ * 内容流是 Flate 压缩的，误伤概率可忽略；即便如此，写完仍用 CGPDFDocument 回读校验
+ * 页数与页面尺寸，不通过就把原始字节写回 —— 宁可脏一次，也不产出坏图标。
+ *
+ * /Producer 里的 macOS 版本号没法这样归一（长度随系统版本变），同一台机器上它是稳定的
+ * —— 换 macOS 大版本后这一份会再脏一次，属预期。 */
+static BOOL is_digit_byte(unsigned char c) { return c >= '0' && c <= '9'; }
+static BOOL is_hex_byte(unsigned char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+/* "(D:YYYYMMDDHHmmSSZ00'00')" —— 共 25 字节，覆写区是下标 1..23 */
+static BOOL matches_pdf_date(const unsigned char *p, NSUInteger i, NSUInteger n)
+{
+    if (i + 25 > n) return NO;
+    if (p[i] != '(' || p[i + 1] != 'D' || p[i + 2] != ':') return NO;
+    for (NSUInteger k = 3; k < 17; k++) if (!is_digit_byte(p[i + k])) return NO;
+    return p[i + 17] == 'Z'
+        && is_digit_byte(p[i + 18]) && is_digit_byte(p[i + 19])
+        && p[i + 20] == '\''
+        && is_digit_byte(p[i + 21]) && is_digit_byte(p[i + 22])
+        && p[i + 23] == '\'' && p[i + 24] == ')';
+}
+
+/* "<32 位十六进制>" —— 共 34 字节，覆写区是下标 1..32 */
+static BOOL matches_pdf_id(const unsigned char *p, NSUInteger i, NSUInteger n)
+{
+    if (i + 34 > n) return NO;
+    if (p[i] != '<') return NO;
+    for (NSUInteger k = 1; k <= 32; k++) if (!is_hex_byte(p[i + k])) return NO;
+    return p[i + 33] == '>';
+}
+
+/* 就地归一化；成功返回 YES。归一化了几处通过 dates / ids 带出（可为 NULL），供调用方打印。
+ * 本函数自己不打任何东西 —— 报告统一在 build_pdf 末尾出，顺序才好读。 */
+static BOOL normalize_pdf_metadata(NSString *path, CGRect expectBox,
+                                   NSUInteger *dates, NSUInteger *ids)
+{
+    NSData *orig = [NSData dataWithContentsOfFile:path];
+    if (!orig) return NO;
+    NSMutableData *d = [orig mutableCopy];
+    unsigned char *p = d.mutableBytes;
+    NSUInteger n = d.length;
+
+    static const char kDate[] = "D:20000101000000Z00'00'";             /* 23 字节 */
+    static const char kId[]   = "53494d504c45464c5949434f4e303030";   /* 32 字节 = "SIMPLEFLYICON000" 的 hex */
+    /* 等长是这套做法的全部前提：多一个字节就等于往 PDF 里插字节，xref / startxref 全歪。
+     * 这两条断言就是防这个 —— 当初 kId 手滑多写了两个字符（34 个），
+     * 靠下面那次回读校验才发现。 */
+    _Static_assert(sizeof kDate - 1 == 23, "kDate 必须是 23 个字符");
+    _Static_assert(sizeof kId - 1 == 32,   "kId 必须是 32 个十六进制字符");
+
+    NSUInteger nd = 0, ni = 0;
+    for (NSUInteger i = 0; i < n; i++) {
+        if (matches_pdf_date(p, i, n)) {
+            memcpy(p + i + 1, kDate, sizeof kDate - 1);
+            nd++;
+            i += 24;
+        } else if (matches_pdf_id(p, i, n)) {
+            memcpy(p + i + 1, kId, sizeof kId - 1);
+            ni++;
+            i += 33;
+        }
+    }
+    [d writeToFile:path atomically:NO];
+
+    /* 回读校验：页数 1 + 页面尺寸仍是这次请求的画布尺寸，才算归一化没把文件弄坏 */
+    BOOL ok = NO;
+    CGPDFDocumentRef doc =
+        CGPDFDocumentCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path]);
+    if (doc) {
+        CGPDFPageRef page = (CGPDFDocumentGetNumberOfPages(doc) == 1)
+                          ? CGPDFDocumentGetPage(doc, 1) : NULL;
+        if (page) {
+            CGRect box = CGPDFPageGetBoxRect(page, kCGPDFMediaBox);
+            ok = (fabs(box.size.width - expectBox.size.width) < 0.01
+               && fabs(box.size.height - expectBox.size.height) < 0.01);
+        }
+        CGPDFDocumentRelease(doc);
+    }
+    if (!ok) [orig writeToFile:path atomically:NO];   /* 宁可脏一次，也不留坏图标 */
+    else { if (dates) *dates = nd; if (ids) *ids = ni; }
+    return ok;
+}
+
 /* 22x16 pt 的输入法图标 PDF */
 static void build_pdf(NSString *outPath, struct IconOpts o)
 {
@@ -224,6 +323,10 @@ static void build_pdf(NSString *outPath, struct IconOpts o)
     CGPDFContextClose(ctx);
     CGContextRelease(ctx);
 
+    /* 归一化必须在读文件尺寸之前 —— 它改的就是这个文件 */
+    NSUInteger normDates = 0, normIds = 0;
+    BOOL reproducible = normalize_pdf_metadata(outPath, box, &normDates, &normIds);
+
     NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:outPath error:NULL];
     printf("字形      = %s（字体 %s）\n", o.text, fname);
     printf("墨迹边界  = %.2f x %.2f (原始)  →  缩放 %.3f\n", ink.size.width, ink.size.height, s);
@@ -232,6 +335,11 @@ static void build_pdf(NSString *outPath, struct IconOpts o)
                                                                   : "底板 + 不透明字形（仅彩色场合）"));
     printf("PDF       = %s (%llu bytes)\n", outPath.UTF8String,
            (unsigned long long)[attr fileSize]);
+    if (reproducible)
+        printf("元数据    = 归一化 %lu 处时间戳 + %lu 处 ID（同机重复构建字节一致）\n",
+               (unsigned long)normDates, (unsigned long)normIds);
+    else
+        printf("元数据    = ⚠ 归一化后回读校验未通过，已还原原始 PDF（图标本身不受影响）\n");
 
     CGPathRelease(glyphPath);
     CFRelease(font);

@@ -51,7 +51,14 @@ fi
 # 封条必然对不上。改成暂存区签名后 rename 换上去，落地的瞬间签名就是有效的。
 STAGE="$DEST_DIR/.SimpleFly.app.stage"
 echo "==> 复制到暂存目录并签名"
-rm -rf "$STAGE"
+# 残留的暂存副本**挪走**而不是 `rm -rf`：少一次批量删除动作，也留得下现场
+# （上一轮为什么没装成，翻那份残骸最快）。挪到 Caches，**不要**留在
+# ~/Library/Input Methods/ —— 那个目录会被 TIS 当输入法扫描，堆 .app 会污染输入源列表。
+BAK_DIR="$HOME/Library/Caches/SimpleFly"
+mkdir -p "$BAK_DIR"
+if [ -d "$STAGE" ]; then
+  mv "$STAGE" "$BAK_DIR/stale-stage-$(date +%Y%m%d-%H%M%S)"
+fi
 cp -R "$SRC" "$STAGE"
 codesign --force --sign - "$STAGE" >/dev/null 2>&1
 # 判据用 codesign 自己的退出码，**不要**写 `codesign --verify ... | grep -q`：
@@ -62,12 +69,22 @@ if codesign --verify "$STAGE" >/dev/null 2>&1; then
 else
   echo "    ✗ 暂存副本签名校验未通过，已中止（$DEST 未被改动）" >&2
   codesign --verify --verbose=2 "$STAGE" >&2 || true
-  rm -rf "$STAGE"
+  mv "$STAGE" "$BAK_DIR/failed-stage-$(date +%Y%m%d-%H%M%S)"
   exit 1
 fi
 
 echo "==> 替换到 $DEST"
-rm -rf "$DEST"
+# 旧版本**改名挪走**当回滚副本，再把暂存副本 rename 上去 —— 不再 `rm -rf`。
+# 两个理由：① rename 是原子操作，不存在「旧版已删、新版还没拷进去」的空窗；
+# ② 旧版留在手边，装上新版发现不对可以立刻换回来。
+# 备份放 Caches 不放 Input Methods（后者会被 TIS 扫描），带版本号命名，不覆盖上一份。
+if [ -d "$DEST" ]; then
+  OLD_VER=$(plutil -extract CFBundleShortVersionString raw "$DEST/Contents/Info.plist" 2>/dev/null || echo "unknown")
+  OLD_BLD=$(plutil -extract CFBundleVersion raw "$DEST/Contents/Info.plist" 2>/dev/null || echo "0")
+  OLD_BAK="$BAK_DIR/SimpleFly-$OLD_VER-$OLD_BLD.app.bak"
+  mv "$DEST" "$OLD_BAK"
+  echo "    旧版已备份：$OLD_BAK"
+fi
 mv "$STAGE" "$DEST"
 
 echo "==> 签名复核"

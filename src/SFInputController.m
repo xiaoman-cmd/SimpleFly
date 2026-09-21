@@ -181,12 +181,17 @@ static NSString *SFAppSupportDir(void)
  *
  * 位置：~/Library/Application Support/SimpleFly/menu-debug.log（与用户配置同目录，
  * 已知可写）。上限 32 KB，写满即清空重写，不会无限长大。
- * 关掉：defaults write com.simplefly.inputmethod.SimpleFly MenuDebug -bool NO
- * 这是排查期的临时设施，稳定后会随诊断代码一起删掉。 */
+ *
+ * **默认关**（0.8.1 起）。它是一次菜单点击写一行日志的调试设施，日常不该常驻。
+ * 排查菜单问题时先打开再复现，然后看日志：
+ *   defaults write com.simplefly.inputmethod.SimpleFly MenuDebug -bool YES
+ *   defaults delete com.simplefly.inputmethod.SimpleFly MenuDebug     # 用完关掉
+ * 注意「日志一行都没写」本身也是一条判据（b38 就是靠这片空白排掉前两轮死因的）——
+ * 那时它默认开着，现在得自己先打开，这条判据才成立。 */
 static void SFMenuDebugLog(NSString *fmt, ...)
 {
     NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
-    if ([d objectForKey:@"MenuDebug"] && ![d boolForKey:@"MenuDebug"]) return;
+    if (![d boolForKey:@"MenuDebug"]) return;
 
     va_list ap;
     va_start(ap, fmt);
@@ -1711,7 +1716,8 @@ SF_THEME_ACTION(luna)
 /* 菜单里点中一款主题（或拿到一个不认识的名称），都落到这里。
  *
  * 名称不是内置主题就什么都不做 —— 但**不能静默**：真机上排查「点了没反应」时，
- * 这条提示与 SFMenuDebugLog 的日志是仅有的两个证据来源。 */
+ * 这条提示与 SFMenuDebugLog 的日志是仅有的两个证据来源
+ * （后者 0.8.1 起默认关，要看它得先 `defaults write … MenuDebug -bool YES`）。 */
 - (void)pickThemeNamed:(NSString *)name sender:(id)sender
 {
     /* 标记「第二层菜单里这一次选择已经落到实处」—— popUpThemeMenu 靠它决定要不要走
