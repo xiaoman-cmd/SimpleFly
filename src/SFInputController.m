@@ -998,6 +998,18 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
 {
     NSMenu *m = [[NSMenu alloc] initWithTitle:@"SimpleFly"];
 
+    /* 自更新：菜单点一下，后台分离进程跑 tools/self_update.sh。
+     * 脚本自动二选一：本机有 git 仓库 → 拉取+构建+安装（开发者）；
+     * 没有 → 下载 GitHub Release 预编译包直接安装（普通用户，无需 git / Xcode CLT）。
+     * 以 NSTask 启动独立 zsh 进程执行，install 末尾 pkill -x SimpleFly 只杀旧输入法，
+     * 不会带走这个更新器。 */
+    NSMenuItem *upd = [[NSMenuItem alloc] initWithTitle:@"更新到最新版"
+                                                  action:@selector(menuUpdate:)
+                                           keyEquivalent:@""];
+    upd.target = self;
+    [m addItem:upd];
+    [m addItem:[NSMenuItem separatorItem]];
+
     /* 候选窗底部编码提示：带当前状态，点击翻转（等价 Ctrl+Shift+H） */
     BOOL hintOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"];
     NSMenuItem *hint = [[NSMenuItem alloc] initWithTitle:
@@ -1062,6 +1074,50 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     id client = [sender isKindOfClass:[NSDictionary class]]
                 ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
     [self openWebDAVConfig:client ?: sender];
+}
+
+- (void)menuUpdate:(id)sender
+{
+    id client = [sender isKindOfClass:[NSDictionary class]]
+                ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
+    [self doUpdateWithClient:client ?: sender];
+}
+
+/* 启动分离式自更新：把仓库路径与远程 URL 交给 bundle 内的 self_update.sh，
+ * 用 NSTask 起一个独立的 zsh 进程执行（不 wait）。install.sh 末尾的
+ * pkill -x SimpleFly 只杀旧输入法进程，这个 zsh 进程名不是 SimpleFly，不受影响。 */
+- (void)doUpdateWithClient:(id)client
+{
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    NSString *repo = [d stringForKey:@"UpdateRepo"];
+    if (repo.length == 0)
+        repo = @"/Users/phoenix/WorkBuddy/SimpleFly";   // 开发机默认仓库路径
+    NSString *remote = @"https://github.com/xiaoman-cmd/SimpleFly.git";
+
+    NSString *script = [[NSBundle mainBundle] pathForResource:@"self_update" ofType:@"sh"];
+    if (script.length == 0) {
+        [self showHUD:@"找不到自更新脚本，请重新构建 SimpleFly" accent:YES seconds:3.0 client:client];
+        return;
+    }
+
+    // 保留引用，避免 NSTask 被 ARC 提前释放（不会因此杀子进程，但稳妥起见）。
+    static NSMutableArray<__kindof NSTask *> *gUpdateTasks;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gUpdateTasks = [NSMutableArray array]; });
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/bin/zsh";
+    task.arguments = @[script, repo, remote];
+    @try {
+        [task launch];
+        [gUpdateTasks addObject:task];
+    } @catch (NSException *e) {
+        [self showHUD:@"启动更新器失败（环境异常）" accent:YES seconds:3.0 client:client];
+        return;
+    }
+
+    [self showHUD:@"已在后台启动更新，完成后会通知你"
+           accent:NO seconds:3.0 client:client];
 }
 
 

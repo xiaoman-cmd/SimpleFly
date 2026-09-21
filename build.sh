@@ -98,6 +98,15 @@ build_app() {
     echo "    本地化: $(basename "$LP")"
   done
 
+  # 自更新脚本：随 app 一起打进 bundle，运行时由菜单「更新到最新版」通过
+  # NSBundle pathForResource 取到，再以 NSTask 启动（见 SFInputController.m）。
+  if [ -f "$ROOT/tools/self_update.sh" ]; then
+    cp "$ROOT/tools/self_update.sh" "$APP/Contents/Resources/self_update.sh"
+    echo "    自更新脚本: tools/self_update.sh"
+  else
+    echo "    ! 缺少 tools/self_update.sh" >&2
+  fi
+
   if [ -f "$DICT" ]; then
     cp "$DICT" "$APP/Contents/Resources/simplefly.dict"
     echo "    码表: $(wc -l < "$DICT" | tr -d ' ') 行"

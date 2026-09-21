@@ -292,6 +292,32 @@ killall SimpleFly
 | 错误提示 | 401=密码不是应用密码；403/404/405/409 统一提示「目录不存在」（坚果云父目录缺失全在这组） |
 | 不做 | 自动同步、双向合并——手动两键整体覆盖，冲突面为零；输入法进程不挂常驻网络任务 |
 
+### 自更新（菜单一键更新）
+
+**场景**：开发期频繁迭代不想手动跑命令；普通用户也不想装 git / Xcode 就能升级。
+
+```text
+点菜单栏输入法名字 → 「更新到最新版」
+   后台执行（自动二选一）：
+     有本地 git 仓库  → git 拉取 → 构建 → 安装 → 免登刷新   （开发者，需 git + Xcode CLT）
+     无本地仓库       → 下载 GitHub Release 预编译包 → 安装   （普通用户，只需系统自带 curl）
+   完成后弹系统通知
+```
+
+| 细节 | 说明 |
+|---|---|
+| 入口 | 输入法菜单顶项「更新到最新版」，点一下即后台启动；当前进程继续服务，直到安装末尾被 `pkill -x SimpleFly` 正常退出 |
+| 运行方式 | 以 `NSTask` 起一个**独立 zsh 进程**（`tools/self_update.sh`），不在 SimpleFly 进程组里；`pkill -x SimpleFly` 只杀旧输入法，不带走更新器 |
+| 模式选择 | 脚本自动判断：本地有 `$REPO/.git` 且含 `build.sh` → **源码模式**；否则 → **预编译模式**。两种模式配置保全与免登刷新一致 |
+| 源码模式（开发者） | `git fetch` + `git merge --ff-only`：**非快进直接报错退出，绝不静默丢弃工作**；工作树有未提交改动先 `stash` 后 `stash pop`；复用 `build.sh`（自动探测 clang 版本，clang < 12 套 `SIMPLEFLY_MIN_MACOS=10.15`） |
+| 预编译模式（普通用户） | 从 GitHub Release 下载 `SimpleFly.app.zip`（`curl`，系统自带）解压即装。**无需 git，也无需 Xcode Command Line Tools**——解决「普通用户没装开发工具就装不上更新」的问题 |
+| 版本比较 | 预编译模式先查 Release 最新 `tag_name`，与已装 `CFBundleShortVersionString` 比对；**已是最新则跳过下载**直接通知；查不到版本信息则兜底直接下载 |
+| 免登刷新 | 安装后用 `tis_register --enable` 当场重注册并启用，**免去注销重登**。预编译模式用 bundle 内嵌的 `tis_register`（`package_release.sh` 打包时编译嵌入）；源码模式回退到现场用 clang 编译 |
+| 配置保全 | **绝不删除** `~/Library/Application Support/SimpleFly`（phrase.txt / simplefly.dict / webdav.conf / freq.txt），也绝不 `defaults delete`；更新前只做一份时间戳备份供回滚 |
+| 反馈 | 菜单点击即弹 HUD「已在后台启动更新…」；成功/失败用系统通知；全程日志在 `/tmp/simplefly_update.log` |
+| 自定义仓库路径 | 默认 `/Users/phoenix/WorkBuddy/SimpleFly`；终端 `defaults write com.simplefly.inputmethod.SimpleFly UpdateRepo /你的/仓库/路径` 可覆盖（仅影响源码模式） |
+| 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.7.0`） |
+
 ### 简繁转换（0.5.4 最简版；0.5.6 双向 + 直接繁体输出）
 
 **场景**：粤语书面语、给港澳朋友发消息时要用繁体。

@@ -1,6 +1,8 @@
 # 构建产物
 build/
 *.o
+# 发布包（由 tools/package_release.sh 生成，只上传到 GitHub Release，不进仓库）
+SimpleFly.app.zip
 
 # macOS
 .DS_Store
