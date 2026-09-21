@@ -34,14 +34,47 @@ mkdir -p "$DEST_DIR"
 # 只删自己这一个 bundle，且路径必须落在 ~/Library/Input Methods 下
 if [ -d "$DEST" ]; then
   case "$DEST" in
-    "$HOME/Library/Input Methods/SimpleFly.app") rm -rf "$DEST" ;;
+    "$HOME/Library/Input Methods/SimpleFly.app") ;;
     *) echo "路径检查未通过，已中止：$DEST" >&2; exit 1 ;;
   esac
 fi
 
-echo "==> 复制到 $DEST"
-cp -R "$SRC" "$DEST"
-codesign --force --sign - "$DEST" >/dev/null 2>&1 || echo "   (重新签名失败，通常不影响本机使用)"
+# 先在暂存目录里签好名、验过，再整体换上去 —— 不要「先拷到 $DEST 再原地签名」。
+#
+# 0.7.1 踩过：原地签名写出来的封条和磁盘内容对不上，codesign -v 报
+# “invalid resource directory (directory or signature have been modified)”。
+# 原因是 TIS 只要发现这个输入法被选中（系统记住的选择不会因为 pkill 而消失），
+# 就会立刻把刚落地的 bundle 拉起来执行；而 codesign 是「先把主二进制拷成
+# xxx.cstemp、改完再挪回去」的原地操作，对着一个正在被执行的 bundle 干这事，
+# 封条必然对不上。改成暂存区签名后 rename 换上去，落地的瞬间签名就是有效的。
+STAGE="$DEST_DIR/.SimpleFly.app.stage"
+echo "==> 复制到暂存目录并签名"
+rm -rf "$STAGE"
+cp -R "$SRC" "$STAGE"
+codesign --force --sign - "$STAGE" >/dev/null 2>&1
+# 判据用 codesign 自己的退出码，**不要**写 `codesign --verify ... | grep -q`：
+# 在 `set -o pipefail` 下 grep -q 命中即退出，codesign 后续的写入会吃到 SIGPIPE
+# 而非零退出，于是「签名有效」反被判成失败（0.7.1 正好踩到）。
+if codesign --verify "$STAGE" >/dev/null 2>&1; then
+  echo "    签名有效  ✓"
+else
+  echo "    ✗ 暂存副本签名校验未通过，已中止（$DEST 未被改动）" >&2
+  codesign --verify --verbose=2 "$STAGE" >&2 || true
+  rm -rf "$STAGE"
+  exit 1
+fi
+
+echo "==> 替换到 $DEST"
+rm -rf "$DEST"
+mv "$STAGE" "$DEST"
+
+echo "==> 签名复核"
+if codesign --verify "$DEST" >/dev/null 2>&1; then
+  echo "    $DEST 签名有效  ✓"
+else
+  echo "    ⚠ 签名校验未通过（ad-hoc 自签，通常不影响本机使用）：" >&2
+  codesign --verify --verbose=2 "$DEST" >&2 || true
+fi
 
 # 构建版本 vs 安装版本自检。
 # 0.5.0 踩过一次：改完功能只 build 没 install，真机表现是「新功能完全没反应」，

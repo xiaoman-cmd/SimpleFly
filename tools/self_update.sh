@@ -144,11 +144,31 @@ else
   # 去掉这个 xattr 后可直接运行（系统设置里仍可在「仍要打开」里放行）。
   xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
-  # 先停旧进程，再替换 bundle（避免文件占用 / 旧代码残留）
+  # 签名校验 / 补签：必须在**还没放到 $DEST**的时候做。
+  # 一是不让用户装上一个签名无效的 bundle（0.7.0 / 0.7.1 的线上包就是这种，
+  # package_release.sh 内嵌 tis_register 后没重签）；二是绝不能在 $DEST 原地补签 ——
+  # TIS 会在输入法被选中时立刻把落地的 bundle 拉起来执行，对着正在执行的 bundle
+  # 原地签名写出来的封条对不上（报 "invalid resource directory"）。
+  if codesign --verify "$APP" >/dev/null 2>&1; then
+    log "包内签名校验通过"
+  else
+    log "包内签名无效，重新 ad-hoc 签名…"
+    codesign --force --sign - "$APP" >/dev/null 2>&1 || log "重新签名失败（继续安装）"
+    codesign --verify "$APP" >/dev/null 2>&1 \
+      && log "补签后签名校验通过" \
+      || log "警告：签名仍无效，继续安装（ad-hoc 自签，通常不影响本机使用）"
+  fi
+
+  # 先停旧进程，再「暂存 → 替换」换上去。用 rename 换而不是直接 cp 到 $DEST，
+  # 是为了让 $DEST 一出现就是完整且已签好的 bundle（避免半成品被系统拉起）。
   pkill -x SimpleFly 2>/dev/null || true
   sleep 1
-  rm -rf "$DEST" || { rm -rf "$TMPD" "$ZIP"; fail "无法移除旧 bundle（可能被占用），请稍后重试"; }
-  cp -R "$APP" "$DEST" || { rm -rf "$TMPD" "$ZIP"; fail "安装失败（复制 bundle 出错）"; }
+  DESTDIR_L="$HOME/Library/Input Methods"
+  STAGE="$DESTDIR_L/.SimpleFly.app.stage"
+  rm -rf "$STAGE"
+  cp -R "$APP" "$STAGE" || { rm -rf "$TMPD" "$ZIP" "$STAGE"; fail "暂存 bundle 失败"; }
+  rm -rf "$DEST" || { rm -rf "$TMPD" "$ZIP" "$STAGE"; fail "无法移除旧 bundle（可能被占用），请稍后重试"; }
+  mv "$STAGE" "$DEST" || { rm -rf "$TMPD" "$ZIP"; fail "替换 bundle 失败"; }
   rm -rf "$TMPD" "$ZIP"
 fi
 
