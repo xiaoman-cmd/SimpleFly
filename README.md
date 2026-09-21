@@ -316,7 +316,7 @@ killall SimpleFly
 | 配置保全 | **绝不删除** `~/Library/Application Support/SimpleFly`（phrase.txt / simplefly.dict / webdav.conf / freq.txt），也绝不 `defaults delete`；更新前只做一份时间戳备份供回滚 |
 | 反馈 | 菜单点击即弹 HUD「已在后台启动更新…」；成功/失败用系统通知；全程日志在 `/tmp/simplefly_update.log` |
 | 自定义仓库路径 | 默认 `/Users/phoenix/WorkBuddy/SimpleFly`；终端 `defaults write com.simplefly.inputmethod.SimpleFly UpdateRepo /你的/仓库/路径` 可覆盖（仅影响源码模式） |
-| 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.7.2`） |
+| 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.7.3`） |
 
 ### 简繁转换（0.5.4 最简版；0.5.6 双向 + 直接繁体输出）
 

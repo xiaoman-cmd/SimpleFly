@@ -64,18 +64,21 @@ build_app() {
 
   # 图标。三个产出，用途完全不同：
   #
-  #   SimpleFly.pdf   22x16 pt 矢量 PDF —— 菜单栏图标（0.5.0 及以前也是列表图标）。
-  #     必须是 **PDF 且页面尺寸 = 22x16 pt**（与鼠须管 rime.pdf 一致）：系统的输入法图标按
-  #     PDF 页面尺寸当逻辑尺寸用，不按像素 —— 早先用 128x128、72dpi 的 TIFF，
-  #     被理解成 128 pt 见方，在输入法菜单里就是「图标太大」。
+  #   SimpleFly.pdf   22x16 pt 矢量 PDF —— **菜单栏图标**。
+  #     Info.plist 里顶层 tsInputMethodIconFileKey + 两个 mode 级 key
+  #     （tsInputModeMenuIconFileKey / tsInputModeAlternateMenuIconFileKey）都指向它。
+  #     为什么必须是 22x16：系统拿 **PDF 页面尺寸**当图标的逻辑尺寸用，而 macOS 菜单栏里
+  #     自带「简体拼音」和鼠须管（rime.pdf）都正是 22x16 pt。给它换成 16x16 的方形 TIFF，
+  #     菜单栏图标就会比别人**窄一圈**（0.5.1–0.7.2 的实际症状）。
   #     而且它会被**当模板图渲染**（系统只看 alpha、自己涂成单色），所以底板必须配
   #     **挖空**的字形；实心白字会被涂成一整块纯黑方块，字全没了。详见 tools/make_icon.m 头部。
   #
-  #   SimpleFly.tiff  16x16@72dpi + 32x32 双帧 TIFF —— **模式图标（0.5.1 起）**，
-  #     Info.plist 三个 tsInputMode*IconFileKey 指向它。0.5.0 及以前的 22x16pt PDF 在 macOS 26 的
+  #   SimpleFly.tiff  16x16@72dpi + 32x32 双帧 TIFF —— **设置列表的图标**，
+  #     只给 tsInputModePaletteIconFileKey 用。0.5.0 及以前的 22x16pt PDF 在 macOS 26 的
   #     「系统设置 › 键盘 › 输入法」列表不被采用（实测回退 .icns 的 16x16 表示，
   #     徽标只有 26x26 px）；解剖 SCIM.app 的 pinyin.tiff 得到 Apple 自家规格
   #     （双帧 TIFF、黑墨挖空底板），同一列表里「拼」徽标即此格式、显示正常。
+  #     **别顺手把它也给菜单栏 key 用** —— 那会让菜单栏图标退回 16x16 的窄版。
   #
   #   SimpleFly.icns  macOS 应用图标 —— Finder / 系统设置里那个方块。
   #     **同样必须挖空**（0.4.1 修）：系统设置的输入源列表、输入法切换菜单都会把
