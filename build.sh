@@ -68,8 +68,9 @@ build_app() {
   #     Info.plist 里顶层 tsInputMethodIconFileKey + 两个 mode 级 key
   #     （tsInputModeMenuIconFileKey / tsInputModeAlternateMenuIconFileKey）都指向它。
   #     为什么必须是 22x16：系统拿 **PDF 页面尺寸**当图标的逻辑尺寸用，而 macOS 菜单栏里
-  #     自带「简体拼音」和鼠须管（rime.pdf）都正是 22x16 pt。给它换成 16x16 的方形 TIFF，
-  #     菜单栏图标就会比别人**窄一圈**（0.5.1–0.7.2 的实际症状）。
+  #     自带「简体拼音」的「拼」正是 22x16 pt（@2x 屏实测 44×31 px）。
+  #     ⚠️ 别再写「鼠须管 rime.pdf 也是 22x16」—— 实测它是 **16x16**，见 docs/开发笔记.md。
+  #     给它换成 16x16 的方形 TIFF，菜单栏图标就会比别人**窄一圈**（0.5.1–0.7.2 的实际症状）。
   #     而且它会被**当模板图渲染**（系统只看 alpha、自己涂成单色），所以底板必须配
   #     **挖空**的字形；实心白字会被涂成一整块纯黑方块，字全没了。详见 tools/make_icon.m 头部。
   #
