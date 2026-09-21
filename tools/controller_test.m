@@ -35,7 +35,9 @@
 - (void)setupState;      /* 定义在 .m 里，initWithServer: 之后会调它 */
 - (NSMenu *)menu;        /* 状态栏菜单（IMK informal，覆盖实现） */
 - (NSDictionary<NSString *, NSString *> *)webdavConfig;   /* 合并 conf + defaults */
-- (void)openWebDAVConfig:(id)sender;                      /* 「网盘配置…」实现 */
+- (void)openWebDAVConfig:(id)sender;                      /* 「网盘配置」实现 */
+- (void)openUserConfig:(id)sender;                        /* 「用户配置」实现 */
+- (void)openUserManual:(id)sender;                        /* 「用户手册」实现 */
 @end
 
 #pragma mark - 断言
@@ -336,13 +338,28 @@ static void WritePhraseFile(NSString *content)
 
 #pragma mark - 用例
 
+/* -client 的测试替身。
+ *
+ * 真机上 IMKInputController 的 -client 返回当前输入会话的客户端；测试里那块内部字段
+ * 没有初始化（见 Fresh 的注释），菜单命令的 client 兜底一旦问它就会摸到野指针、
+ * 当场段错误。把它的实现换成返回 gClient —— 语义与真机一致。
+ * gClient 每轮 Fresh 都新建，所以这里只在被调用时取值，不做缓存。 */
+static id SFTestClientGetter(id self, SEL _cmd) { return gClient; }
+
 static void Fresh(void)
 {
     gClient = [[FakeClient alloc] init];
     gClient.caretRect = NSMakeRect(200, 400, 8, 20);
     /* 不走 initWithServer:delegate:client: —— IMKInputController 那一步会校验 client
      * 必须是真实的输入会话代理，塞个假对象进去直接抛异常。alloc + setupState 等价，
-     * 只是跳过了 IMK 自己的那点内部初始化，而本测试根本不碰 IMK 内部。 */
+     * 只是跳过了 IMK 自己的那点内部初始化，而本测试根本不碰 IMK 内部。
+     * 代价就是 -client 不可用，所以要先把它的实现换掉（幂等，只做一次）。 */
+    static BOOL clientPatched = NO;
+    if (!clientPatched) {
+        Method m = class_getInstanceMethod([TestController class], @selector(client));
+        if (m) method_setImplementation(m, (IMP)SFTestClientGetter);
+        clientPatched = YES;
+    }
     gCtl = [[TestController alloc] init];
     [gCtl setupState];
 }
@@ -1026,10 +1043,27 @@ static NSString *ThemeName(void) { return (NSString *)ObjIvar(gCtl, "_themeName"
 /* test_code_hint 里用到、但定义在更后面的符号 —— 前置声明 */
 static NSString *HUDText(void);
 
-/* 控制器私有方法没有公开头文件，测试直接调要自己补声明 */
+/* 控制器私有方法没有公开头文件，测试直接调要自己补声明。
+ * 注意这里**不声明 popUpThemeMenu** —— 那个方法会真的 popUp 出菜单并原地等用户操作，
+ * 单测里一调就卡死（跑测试的机器上没人去点）。测试要的是 themePickerMenu 造出来的那张
+ * 菜单本身，有了它就能逐项断言。 */
 @interface SimpleFlyInputController (TestOnly)
 - (void)menuToggleCodeHint:(id)sender;
+- (void)menuPickTheme:(id)sender;
+- (NSMenu *)themePickerMenu;
+- (void)selectThemeNamed:(NSString *)name client:(id)client;
+- (void)pickThemeNamed:(NSString *)name sender:(id)sender;
+- (void)toggleThemeAutoWithClient:(id)client;
+- (void)systemAppearanceChanged:(NSNotification *)note;
 @end
+
+/* 感知亮度（Rec.709 权重，直接用 sRGB 分量加权 —— 不做 gamma 解码）。
+ * 专门给「这配色能看清吗」这类断言用：比逐个写 RGB 上下界省事，
+ * 也不依赖 NSColor 处在哪个色彩空间。 */
+static CGFloat SFLum(NSColor *c)
+{
+    return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent;
+}
 
 static void test_theme(void)
 {
@@ -1078,24 +1112,118 @@ static void test_theme(void)
     CHECK([Panel().theme.name isEqualToString:@"metro"], "未知主题名退回 metro（%s）",
           CStr(Panel().theme.name));
 
-    /* --- 0.6.2 新增的 5 套鼠须管官方配色：名字齐全 + BGR/RGB 换算防呆 --- */
-    CHECK(names.count == 8, "内置 8 套主题（%lu）", (unsigned long)names.count);
-    for (NSString *t in @[@"aqua", @"luna", @"ink", @"google", @"mojave_dark"]) {
+    /* --- 内置主题清单（0.8.0 起 13 款） --- */
+    CHECK(names.count == 13, "内置 13 套主题（%lu）", (unsigned long)names.count);
+    for (NSString *t in @[@"metro", @"jade", @"blossom", @"linen", @"paper", @"ink", @"contrast",
+                           @"dark", @"mojave_dark", @"amber", @"neon", @"retro", @"luna"]) {
         SFCandidateTheme *th = [SFCandidateTheme themeNamed:t];
         CHECK([th.name isEqualToString:t], "主题 %s 存在", t.UTF8String);
     }
-    /* Rime 官方色值是 BGR，抄表时换算错位会让红蓝对调 ——
-     * aqua/google/mojave_dark 的高亮块/底色都是蓝系，蓝分量必须大于红分量。 */
-    SFCandidateTheme *aqua = [SFCandidateTheme themeNamed:@"aqua"];
-    CHECK(aqua.selBack.blueComponent > aqua.selBack.redComponent, "aqua 高亮是蓝系（BGR 换算正确）");
-    CHECK(aqua.back.alphaComponent < 1.0, "aqua 背板半透明（alpha %.2f）", aqua.back.alphaComponent);
+
+    /* --- 0.8.0 下掉的两款：aqua / google 与 metro 同为「浅底 + 蓝」，留着只是让菜单变长。
+     * 老配置里若还写着这两个名字，必须回退 metro 而不是拿到空配色（否则绘制时崩）。 --- */
+    CHECK(![names containsObject:@"aqua"] && ![names containsObject:@"google"],
+          "aqua / google 已从清单移除");
+    CHECK([[SFCandidateTheme themeNamed:@"aqua"].name isEqualToString:@"metro"],
+          "写老主题名 aqua 退回 metro");
+    CHECK([[SFCandidateTheme themeNamed:@"google"].name isEqualToString:@"metro"],
+          "写老主题名 google 退回 metro");
+
+    /* --- 色相防呆：抄 Rime 色值是 BGR，换算错位会让红蓝对调 --- */
+    SFCandidateTheme *mjdk = [SFCandidateTheme themeNamed:@"mojave_dark"];
+    CHECK(mjdk.back.blueComponent > mjdk.back.redComponent, "mojave_dark 底色偏蓝灰");
+    SFCandidateTheme *jd = [SFCandidateTheme themeNamed:@"jade"];
+    CHECK(jd.selBack.greenComponent > jd.selBack.redComponent, "jade 高亮是青玉绿（绿分量最大）");
+    SFCandidateTheme *bl = [SFCandidateTheme themeNamed:@"blossom"];
+    CHECK(bl.selBack.redComponent > bl.selBack.greenComponent, "blossom 高亮是玫红（红分量最大）");
+    SFCandidateTheme *am = [SFCandidateTheme themeNamed:@"amber"];
+    CHECK(am.selBack.redComponent > am.selBack.blueComponent &&
+          am.selBack.greenComponent > am.selBack.blueComponent,
+          "amber 高亮是琥珀金（蓝分量最小 —— 低蓝光的重点就在这）");
+    SFCandidateTheme *rt = [SFCandidateTheme themeNamed:@"retro"];
+    CHECK(rt.selBack.greenComponent > rt.selBack.redComponent, "retro 高亮是磷光绿");
+    SFCandidateTheme *nv = [SFCandidateTheme themeNamed:@"neon"];
+    CHECK(nv.selBack.greenComponent > nv.selBack.blueComponent &&
+          nv.selBack.blueComponent > nv.selBack.redComponent, "neon 高亮是青绿");
+
+    /* --- 半透明（8 位 hex 的高字节）只该出现在 luna / ink 上 --- */
     SFCandidateTheme *luna = [SFCandidateTheme themeNamed:@"luna"];
     CHECK(luna.back.alphaComponent < 1.0, "luna 背板半透明（alpha %.2f）", luna.back.alphaComponent);
     CHECK(luna.selBack.alphaComponent < 0.5, "luna 高亮块是 25% 黑");
-    SFCandidateTheme *goog = [SFCandidateTheme themeNamed:@"google"];
-    CHECK(goog.selBack.blueComponent > goog.selBack.redComponent, "google 高亮是蓝系");
-    SFCandidateTheme *mjdk = [SFCandidateTheme themeNamed:@"mojave_dark"];
-    CHECK(mjdk.back.blueComponent > mjdk.back.redComponent, "mojave_dark 底色偏蓝灰");
+    CHECK([SFCandidateTheme themeNamed:@"ink"].back.alphaComponent < 1.0, "ink 背板半透明");
+    CHECK([SFCandidateTheme themeNamed:@"jade"].back.alphaComponent == 1.0,
+          "新主题一律不透明（没误写成 8 位 hex）");
+
+    /* --- 通用防呆：每一款都得过 ---
+     * ① 底色与候选字拉得开 —— 防「浅底配浅字」这种根本看不清的配色；
+     * ② 高亮块底色与块内文字同理 —— 高亮项看不见等于方向键白按。
+     * 阈值 0.25 留了余量：实测最紧的 amber 也有 0.46。 */
+    for (NSString *t in names) {
+        SFCandidateTheme *th = [SFCandidateTheme themeNamed:t];
+        CGFloat d1 = fabs(SFLum(th.back) - SFLum(th.candText));
+        /* 高亮块里三层文字：词是主角（阈值 0.25），编号与附注是次级（0.15）。
+         * 次级松一档是故意的 —— 它们本就该比词弱；但低于 0.15 就是真看不见了：
+         * neon / retro 的初稿把附注写成亮青 / 浅绿压在青绿块上（Δ 只有 0.09），
+         * 单看色值没觉得有问题，是出预览图时肉眼才发现的，这两条断言就是为拦它加的。 */
+        CGFloat d2 = fabs(SFLum(th.selBack) - SFLum(th.selText));
+        CGFloat d3 = fabs(SFLum(th.selBack) - SFLum(th.selLabel));
+        CGFloat d4 = fabs(SFLum(th.selBack) - SFLum(th.selNote));
+        CHECK(d1 > 0.25, "%s 底色与候选字对比足够（Δ亮度 %.2f）", t.UTF8String, d1);
+        CHECK(d2 > 0.25, "%s 高亮块与块内文字对比足够（Δ亮度 %.2f）", t.UTF8String, d2);
+        CHECK(d3 > 0.15, "%s 高亮块与块内编号对比足够（Δ亮度 %.2f）", t.UTF8String, d3);
+        CHECK(d4 > 0.15, "%s 高亮块与块内附注对比足够（Δ亮度 %.2f）", t.UTF8String, d4);
+    }
+
+    /* --- 菜单选款：菜单项走的就是这条路（picker 记住名字 → selectThemeNamed:） --- */
+    Fresh();
+    [gCtl selectThemeNamed:@"retro" client:nil];
+    CHECK([ThemeName() isEqualToString:@"retro"], "手选 retro 生效：%s", CStr(ThemeName()));
+    /* 先取出来再断言：CHECK 是宏，cond 里直接写两层嵌套的消息发送，本机 clang 会解析失败
+     * （missing '[' at start of message send expression）。 */
+    NSString *prefAfterPick = [[NSUserDefaults standardUserDefaults] stringForKey:@"Theme"];
+    CHECK([prefAfterPick isEqualToString:@"retro"], "手选写回 Theme 偏好：%s", CStr(prefAfterPick));
+    CHECK([Panel().theme.name isEqualToString:@"retro"], "候选窗配色同步到 retro");
+    [gCtl selectThemeNamed:@"不存在的主题" client:nil];
+    CHECK([ThemeName() isEqualToString:@"retro"], "手选未知名被忽略（不会切到空配色）");
+
+    /* --- 跟随系统亮暗（ThemeAuto）---
+     * 测试进程里改不了系统外观，用 SIMPLEFLY_FORCE_DARK 指定：1 = 深色、0 = 浅色。 */
+    setenv("SIMPLEFLY_FORCE_DARK", "1", 1);
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"ThemeAuto"];
+    [[NSUserDefaults standardUserDefaults] setObject:@"retro" forKey:@"Theme"];
+    Fresh();
+    CHECK([ThemeName() isEqualToString:@"amber"], "深色系统 → amber：%s", CStr(ThemeName()));
+    NSString *prefInAuto = [[NSUserDefaults standardUserDefaults] stringForKey:@"Theme"];
+    CHECK([prefInAuto isEqualToString:@"retro"],
+          "跟随期间不动 Theme 偏好（那是用户手选的，关掉要还回去）：%s", CStr(prefInAuto));
+
+    setenv("SIMPLEFLY_FORCE_DARK", "0", 1);
+    [gCtl systemAppearanceChanged:nil];
+    CHECK([ThemeName() isEqualToString:@"jade"], "系统转浅色 → jade：%s", CStr(ThemeName()));
+    NSString *prefAfterSwitch = [[NSUserDefaults standardUserDefaults] stringForKey:@"Theme"];
+    CHECK([prefAfterSwitch isEqualToString:@"retro"],
+          "换过外观后 Theme 偏好依旧是 retro：%s", CStr(prefAfterSwitch));
+    CHECK([Panel().theme.name isEqualToString:@"jade"], "候选窗配色跟着换到 jade");
+
+    /* 关掉跟随 → 回到用户手选的那款，而不是停在自动值上 */
+    [gCtl toggleThemeAutoWithClient:nil];
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"ThemeAuto"] == NO, "跟随开关已关");
+    CHECK([ThemeName() isEqualToString:@"retro"], "关掉跟随回到手选的 retro：%s", CStr(ThemeName()));
+
+    /* 开着跟随时手选一款 → 自动退出跟随（否则刚选的那款会被下次外观变化覆盖掉） */
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"ThemeAuto"];
+    Fresh();
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"ThemeAuto"] == YES, "先开着跟随");
+    [gCtl selectThemeNamed:@"linen" client:nil];
+    CHECK([[NSUserDefaults standardUserDefaults] boolForKey:@"ThemeAuto"] == NO,
+          "手选主题即退出跟随");
+    CHECK([ThemeName() isEqualToString:@"linen"], "并停在手选的 linen");
+
+    /* 收尾：恢复默认，别把偏好泄给后面的测试 */
+    unsetenv("SIMPLEFLY_FORCE_DARK");
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ThemeAuto"];
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
 }
 
 /* 底部编码提示（CodeHint，0.6.3）：候选窗文字底下显示当前高亮候选的音形码。
@@ -1525,17 +1653,24 @@ static void test_webdav_sync(void)
     Fresh();
     CHECK(TypeKey(kVK_ANSI_U, mods) == YES, "Ctrl+Shift+U 被输入法消费");
     CHECK([HUDText() containsString:@"未配置网盘"], "未配置时给引导提示：%s", CStr(HUDText()));
-    CHECK([HUDText() containsString:@"网盘配置"], "引导指向「网盘配置…」菜单：%s", CStr(HUDText()));
+    CHECK([HUDText() containsString:@"网盘配置"], "引导指向「网盘配置」菜单：%s", CStr(HUDText()));
     CHECK([gClient.output length] == 0, "未配置时不上屏");
 
     Fresh();
     CHECK(TypeKey(kVK_ANSI_D, mods) == YES, "Ctrl+Shift+D 被输入法消费");
     CHECK([HUDText() containsString:@"未配置网盘"], "恢复键同样给引导提示：%s", CStr(HUDText()));
 
-    /* 状态栏菜单：0.7.0 起六项 —— 更新到最新版本 / 分隔线 / 编码提示 / 同步 / 恢复 / 配置。
-     * 断言动作选择器、target，以及「标题只留动作名、不带括号补充说明」（说明在 用户手册.md）。 */
+    /* 状态栏菜单：b41 起 **11 项** —— 更新到最新版本 / 分隔线 / 编码提示 / 同步 / 恢复 /
+     * 网盘配置 / 用户配置 / 快捷键一览（子菜单）/ 用户手册 / 分隔线 / 选择主题…。
+     * 断言动作选择器、target，以及「标题只留动作名、不带括号补充说明」（说明在 用户手册.md）。
+     *
+     * 主题**不再摊在主菜单里**：b39 平铺过一版（13 款 + 跟随共 15 项），能点但太长 ——
+     * 24 项里 15 项是主题。b41 改成主菜单只留一条「选择主题…」，点它弹出**我们自己建的**
+     * 第二层菜单（断言见下面 themePickerMenu 那一段）。IMK 自己的 NSMenuItem.submenu
+     * 不能用：子菜单里的项点了没有任何回调（日志 + 实拍证据见 SFInputController.m 文件头
+     * 第 4 层），机制依据见第 5 层（IMK 建命令表时只遍历顶层项）。 */
     NSMenu *m = [gCtl menu];
-    CHECK(m != nil && m.numberOfItems == 6, "菜单有六项（实际 %lu）",
+    CHECK(m != nil && m.numberOfItems == 11, "菜单有十一项（实际 %lu）",
           (unsigned long)(m ? m.numberOfItems : 0));
     if (!m) return;
     CHECK([m itemAtIndex:0].action == @selector(menuUpdate:) &&
@@ -1548,26 +1683,261 @@ static void test_webdav_sync(void)
     CHECK([m itemAtIndex:4].action == @selector(menuWebDAVSyncDown:) &&
           [m itemAtIndex:4].target == gCtl, "第五项 = 从网盘恢复");
     CHECK([m itemAtIndex:5].action == @selector(menuWebDAVConfig:) &&
-          [m itemAtIndex:5].target == gCtl, "第六项 = 网盘配置…");
+          [m itemAtIndex:5].target == gCtl, "第六项 = 网盘配置");
+    CHECK([m itemAtIndex:6].action == @selector(menuUserConfig:) &&
+          [m itemAtIndex:6].target == gCtl, "第七项 = 用户配置");
+    CHECK([m itemAtIndex:8].action == @selector(menuUserManual:) &&
+          [m itemAtIndex:8].target == gCtl, "第九项 = 用户手册");
     CHECK([[m itemAtIndex:2].title containsString:@"编码提示"] &&
           [[m itemAtIndex:3].title containsString:@"同步"] &&
           [[m itemAtIndex:4].title containsString:@"恢复"] &&
-          [[m itemAtIndex:5].title containsString:@"网盘配置"], "标题用中文动词，不写术语");
+          [[m itemAtIndex:5].title containsString:@"网盘配置"] &&
+          [[m itemAtIndex:6].title containsString:@"用户配置"], "标题用中文动词，不写术语");
     /* 菜单文案精简：动作名精确匹配，且任何一项都不带括号补充说明 */
     CHECK([[m itemAtIndex:0].title isEqualToString:@"更新到最新版本"],
           "更新项标题 = 更新到最新版本：%s", CStr([m itemAtIndex:0].title));
     CHECK([[m itemAtIndex:3].title isEqualToString:@"同步到网盘"],
           "同步项标题 = 同步到网盘：%s", CStr([m itemAtIndex:3].title));
-    CHECK([[m itemAtIndex:4].title isEqualToString:@"从网盘恢复…"],
-          "恢复项标题 = 从网盘恢复…：%s", CStr([m itemAtIndex:4].title));
-    CHECK([[m itemAtIndex:5].title isEqualToString:@"网盘配置…"],
-          "配置项标题 = 网盘配置…：%s", CStr([m itemAtIndex:5].title));
+    CHECK([[m itemAtIndex:4].title isEqualToString:@"从网盘恢复"],
+          "恢复项标题 = 从网盘恢复：%s", CStr([m itemAtIndex:4].title));
+    CHECK([[m itemAtIndex:5].title isEqualToString:@"网盘配置"],
+          "配置项标题 = 网盘配置：%s", CStr([m itemAtIndex:5].title));
+    CHECK([[m itemAtIndex:6].title isEqualToString:@"用户配置"],
+          "用户配置项标题 = 用户配置：%s", CStr([m itemAtIndex:6].title));
+    CHECK([[m itemAtIndex:7].title isEqualToString:@"快捷键一览"],
+          "快捷键一览项标题 = 快捷键一览：%s", CStr([m itemAtIndex:7].title));
+    CHECK([[m itemAtIndex:8].title isEqualToString:@"用户手册"],
+          "用户手册项标题 = 用户手册：%s", CStr([m itemAtIndex:8].title));
+    CHECK([m itemAtIndex:9].isSeparatorItem, "第十项 = 分隔线（把主题入口与上面的动作项隔开）");
+    /* 第十一项 = 主题入口。要的是**顶层可点项**（b39 起这条路径真机验证过），点它弹第二层菜单。 */
+    CHECK([m itemAtIndex:10].action == @selector(menuPickTheme:) &&
+          [m itemAtIndex:10].target == gCtl, "第十一项 = 选择主题…");
+    CHECK([[m itemAtIndex:10].title isEqualToString:@"选择主题…"],
+          "主题入口标题 = 选择主题…：%s", CStr([m itemAtIndex:10].title));
+    CHECK([m itemAtIndex:10].submenu == nil,
+          "主题入口不带 IMK 子菜单（放进 submenu 的项点了没反应）");
+
+    /* --- 第二层主题菜单（b41）：主菜单只留入口，菜单本身由 themePickerMenu 造出来 ---
+     *
+     * 为什么不能直接用 IMK 的 NSMenuItem.submenu：b38 装上「点一下就写日志」的诊断后，
+     * 用户连开 11 次菜单，日志里**只有** `menu built`，而 `validate` / `IMK cmd` /
+     * `theme pick` 一条都没有 —— 点击没产生任何回调。同时用 `screencapture` 拍到了菜单
+     * 展开时的实拍：**主题项根本不是灰的**（与可点的「用户手册」同色、`✓` 也正确打在
+     * 当前款上）⇒「项被判成置灰」不成立。两条证据合起来只剩一个解释：**放进子菜单的项
+     * 没被接上派发** —— 机制见 SFInputController.m 文件头第 5 层引的 IMKInputController.h
+     * 282~296 行（菜单画在系统的 Text Input Menu 里、IMK 建命令表只遍历顶层项）。
+     * 旁证：本机装着、能正常工作的鼠须管 0.15.2 `-menu` 里一个子菜单都没有。
+     * 所以 b41 的做法是：主菜单留一条**顶层**「选择主题…」，在它的 action 里 popUp 出这张
+     * **我们自己建的**菜单 —— 由 AppKit 在进程内派发，target 有效。
+     *
+     * 布局：0 = 置灰小标题「候选窗配色」/ 1..13 = 13 款 / 14 = 分隔线 / 15 = 跟随系统亮暗。
+     * 这里**不缀「主题：」前缀**（那是平铺进主菜单才需要的语境补偿），标题就是主题名本身。
+     *
+     * 每项一个**独立 selector**（menuTheme_<主题名>:）。这是连踩三次的结论：
+     *   · b35 给每项配自定义 target「让它自己记住是哪一款」→ IMK 根本不看 target，全废；
+     *   · b36 改成共用 action、靠 infoDictionary 认领 → 只覆盖「sender 是字典」这一种
+     *     形态，AppKit 直调时（sender 是 NSMenuItem）解析不出主题名，照样没反应；
+     *   · b37 把主题名编进方法名 → 仍没反应，因为问题根本不在「认领」而在「点击到不了」。
+     * 下面几条断言分别覆盖这些坑，少测任何一种，bug 就会从另一条路溜回来。 */
+    NSArray<NSString *> *thNames = [SFCandidateTheme allThemeNames];
+    NSMenu *tp = [gCtl themePickerMenu];
+    CHECK(tp != nil, "themePickerMenu 拿得到第二层菜单（单测没法点菜单，只能直接拿它断言）");
+    CHECK(tp != nil && tp.numberOfItems == 16,
+          "第二层 16 项 = 小标题 + 13 款 + 分隔线 + 跟随（实际 %lu）",
+          (unsigned long)(tp ? tp.numberOfItems : 0));
+    if (tp) {
+        CHECK([[tp itemAtIndex:0].title isEqualToString:@"候选窗配色"] &&
+              ![tp itemAtIndex:0].isEnabled && [tp itemAtIndex:0].action == NULL,
+              "首行 = 置灰小标题「候选窗配色」");
+        CHECK([tp itemAtIndex:14].isSeparatorItem, "第 15 项 = 分隔线");
+        CHECK(!tp.autoenablesItems, "第二层菜单 autoenablesItems = NO（同主菜单）");
+
+        BOOL thTargetIsCtl = YES, thResponds = YES, thNamed = YES, thDistinct = YES,
+             thTitled = YES, thEnabled = YES;
+        NSMutableSet<NSString *> *thSeen = [NSMutableSet set];
+        for (NSUInteger i = 0; i < thNames.count; i++) {
+            NSMenuItem *it = [tp itemAtIndex:(NSInteger)(1 + i)];
+            if (![it.title isEqualToString:thNames[i]]) thTitled = NO;
+            if (!it.isEnabled) thEnabled = NO;
+            if (it.target != gCtl) thTargetIsCtl = NO;
+            /* selector 必须与主题名严格对应：只往 kThemes 加一款、忘了加方法，
+             * 这一款真机上就是「点了没反应」，这里要能当场拦住。 */
+            NSString *want = [NSString stringWithFormat:@"menuTheme_%@:", thNames[i]];
+            NSString *have = NSStringFromSelector(it.action);
+            if (![have isEqualToString:want]) thNamed = NO;
+            if (![gCtl respondsToSelector:it.action]) thResponds = NO;
+            if ([thSeen containsObject:have]) thDistinct = NO;
+            [thSeen addObject:have];
+            if (![it.representedObject isEqualToString:thNames[i]]) thNamed = NO;
+        }
+        CHECK(thTitled, "13 款标题就是主题名本身（语境由入口给足，不再缀「主题：」）");
+        CHECK(thEnabled, "13 款都是可点的（autoenablesItems = NO 之下没被自己置灰）");
+        CHECK(thTargetIsCtl, "各项 target 都是 controller（本进程派发，target 有效）");
+        CHECK(thNamed, "各项 selector 严格等于 menuTheme_<主题名>: 且带着自己的主题名");
+        CHECK(thResponds, "controller 真的响应每一项的 selector");
+        CHECK(thDistinct, "各项 selector 互不相同（共用一个正是 b36 的坑）");
+    }
+
+    /* 第 3 层防线（b38）的可用性断言**保留** —— 它挡的是「项被系统判成置灰」那条路径。
+     * b38 的实拍证明本次不是它，但换台机器/换个系统版本仍可能是，拆掉就等于把门敞开。 */
+    CHECK(!m.autoenablesItems, "主菜单 autoenablesItems = NO（可用性不交给系统）");
+
+    Class imk = NSClassFromString(@"IMKInputController");
+    IMP impMine = [SimpleFlyInputController instanceMethodForSelector:
+                       @selector(doCommandBySelector:commandDictionary:)];
+    IMP impTheirs = [imk instanceMethodForSelector:
+                         @selector(doCommandBySelector:commandDictionary:)];
+    CHECK(impTheirs == NULL || impMine != impTheirs,
+          "doCommandBySelector:commandDictionary: 是我们自己实现的那份");
+    CHECK([gCtl respondsToSelector:@selector(doCommandBySelector:commandDictionary:)],
+          "controller 响应检查（IMK 的默认实现就照这个决定派不派发）");
+
+    /* validateMenuItem: 必须放行响应得动的动作、挡住响应不了的 ——
+     * 返回 NO 就等于把菜单项置灰，症状与「点了没反应」一模一样。 */
+    NSMenuItem *thAny = [m itemAtIndex:10];
+    CHECK([gCtl validateMenuItem:thAny], "validateMenuItem: 对主题动作放行");
+    NSMenuItem *thBogus = [[NSMenuItem alloc] initWithTitle:@"x"
+                                                     action:@selector(noSuchMenuAction:)
+                                              keyEquivalent:@""];
+    CHECK(![gCtl validateMenuItem:thBogus], "validateMenuItem: 挡住响应不了的动作");
+
+    CHECK([[tp itemAtIndex:15].title isEqualToString:@"跟随系统亮暗"],
+          "末项 = 跟随系统亮暗（在第二层菜单里，主菜单不再单列）：%s",
+          CStr([tp itemAtIndex:15].title));
+
+    /* 派发形态一：IMK 转发路径 —— sender 是 infoDictionary。
+     * IMK **不看菜单项 target**，它调 -doCommandBySelector:commandDictionary:，
+     * 后者看 controller 响不响应，再把字典发过去。 */
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ThemeAuto"];
+    Fresh();
+    NSMenuItem *thPick = [[gCtl themePickerMenu] itemAtIndex:
+        (NSInteger)(1 + [thNames indexOfObject:@"contrast"])];
+    [gCtl doCommandBySelector:thPick.action
+            commandDictionary:@{ kIMKCommandClientName: gClient }];
+    NSString *thGot = ThemeName();
+    CHECK([thGot isEqualToString:@"contrast"],
+          "字典形态派发生效：主题切到 contrast（实际 %s）", CStr(thGot));
+    CHECK([Panel().theme.name isEqualToString:@"contrast"], "候选窗配色跟着换");
+    NSString *thPref = [[NSUserDefaults standardUserDefaults] stringForKey:@"Theme"];
+    CHECK([thPref isEqualToString:@"contrast"], "并写回 Theme 偏好：%s", CStr(thPref));
+
+    /* 派发形态二：AppKit 直接向 target 发 action —— sender 是 NSMenuItem 本身。
+     * **这一条就是 b36 的盲区**：那版只测了上面的字典形态，所以结构断言全绿、真机照样没反应。 */
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
+    NSMenuItem *thPick2 = [[gCtl themePickerMenu] itemAtIndex:
+        (NSInteger)(1 + [thNames indexOfObject:@"retro"])];
+    IMP impDirect = [gCtl methodForSelector:thPick2.action];
+    ((void (*)(id, SEL, id))impDirect)(gCtl, thPick2.action, thPick2);
+    NSString *thGot2 = ThemeName();
+    CHECK([thGot2 isEqualToString:@"retro"],
+          "菜单项直调形态同样生效：主题切到 retro（实际 %s）", CStr(thGot2));
+    CHECK([Panel().theme.name isEqualToString:@"retro"], "候选窗配色跟着换");
+
+    /* 认不出的主题名不能乱切，但必须出声（静默无反应最误导人） */
+    [gCtl pickThemeNamed:@"no_such_theme" sender:nil];
+    NSString *thStill = ThemeName();
+    CHECK([thStill isEqualToString:@"retro"], "未知主题名时保持原状（%s）", CStr(thStill));
+    CHECK(HUDText().length > 0, "并给出 HUD 提示而不是静默：%s", CStr(HUDText()));
+
+    /* client 兜底：sender 是个裸 NSMenuItem（既不是字典、也不是 client）时，
+     * **绝不能把它当 client 传下去** —— 那会让面板/HUD 定位退化成跟着鼠标走。
+     * 这里只要求切对主题且不崩，位置计算由 candidateTopLeftWithClient: 的
+     * respondsToSelector: 保护兜住。 */
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
+    NSMenuItem *thBare = [[NSMenuItem alloc] initWithTitle:@"luna"
+                                                    action:@selector(menuTheme_luna:)
+                                             keyEquivalent:@""];
+    IMP impBare = [gCtl methodForSelector:thBare.action];
+    ((void (*)(id, SEL, id))impBare)(gCtl, thBare.action, thBare);
+    NSString *thGot3 = ThemeName();
+    CHECK([thGot3 isEqualToString:@"luna"], "裸菜单项当 sender 也能切对（%s）", CStr(thGot3));
+
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
+
+    /* 打勾状态：默认（未跟随时）只有当前款打勾 —— 每项都打勾等于没打 */
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ThemeAuto"];
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
+    NSMenu *thMenuOn = [gCtl themePickerMenu];
+    NSUInteger thOnCount = 0;
+    for (NSUInteger i = 0; i < 13; i++)
+        if ([thMenuOn itemAtIndex:(NSInteger)(1 + i)].state == NSControlStateValueOn)
+            thOnCount++;
+    CHECK(thOnCount == 1, "只当前款打勾（实际打勾 %lu 项）", (unsigned long)thOnCount);
+    CHECK([thMenuOn itemAtIndex:1].state == NSControlStateValueOn, "metro 是当前款，打勾");
+
+    /* 跟随开着时：主题列一个都不打勾（用哪款由系统决定，别假装选中某款） */
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"ThemeAuto"];
+    Fresh();
+    NSMenu *thMenuAuto = [gCtl themePickerMenu];
+    CHECK([thMenuAuto itemAtIndex:15].state == NSControlStateValueOn, "跟随项打勾");
+    BOOL thAnyThemeOn = NO;
+    for (NSUInteger i = 0; i < 13; i++)
+        if ([thMenuAuto itemAtIndex:(NSInteger)(1 + i)].state == NSControlStateValueOn)
+            thAnyThemeOn = YES;
+    CHECK(!thAnyThemeOn, "跟随开着时主题列不打勾");
+    [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ThemeAuto"];
+    [[NSUserDefaults standardUserDefaults] setObject:@"metro" forKey:@"Theme"];
+    Fresh();
+
+    /* --- 「快捷键一览」子菜单：把 用户手册 §四 的键位搬进菜单，不用翻文档 ---
+     * 断言三件事：① 行数与分隔线分段能对上手册的四组；② 每行都是只读的
+     * （都不带 action —— 里面躺着「清空重码记忆」这种破坏性动作，能在菜单里被点中就是事故）；
+     * ③ 键位文本与手册逐字一致（手册和菜单对不上等于两边都不可信）。 */
+    NSMenu *km = [m itemAtIndex:7].submenu;
+    CHECK(km != nil, "第八项带子菜单（父项无 action 也能展开）");
+    CHECK(km.numberOfItems == 15, "一览 15 项 = 12 条键位 + 3 条分隔线（实际 %lu）",
+          (unsigned long)(km ? km.numberOfItems : 0));
+    if (km) {
+        CHECK([[km itemAtIndex:3] isSeparatorItem] && [[km itemAtIndex:9] isSeparatorItem] &&
+              [[km itemAtIndex:12] isSeparatorItem],
+              "三条分隔线把键位分成四组（模式开关 / 查码 / 简繁 / 网盘）");
+        BOOL readonly = YES;
+        for (NSInteger i = 0; i < (NSInteger)km.numberOfItems; i++) {
+            NSMenuItem *it = [km itemAtIndex:i];
+            if (it.isSeparatorItem) continue;
+            /* 还要求**显式置灰**：菜单 `autoenablesItems = NO` 之后，系统不再自动替
+             * 没有 action 的项置灰，得自己 `enabled = NO` —— 否则这些行看着可点
+             * （虽然点了也无效），而里面躺着「清空重码记忆」这种破坏性动作，容易误触。 */
+            if (it.action != nil || it.target != nil || it.isEnabled) readonly = NO;
+        }
+        CHECK(readonly, "每一行都是只读说明（不带 action/target 且显式置灰）");
+        CHECK([[km itemAtIndex:0].title containsString:@"中 / 英 切换"] &&
+              [[km itemAtIndex:0].title containsString:@"单敲 ⇧"],
+              "首行 = 中 / 英 切换 / 单敲 ⇧：%s", CStr([km itemAtIndex:0].title));
+        CHECK([[km itemAtIndex:2].title containsString:@"⇧ 空格"],
+              "全 / 半角切换的键位 = ⇧ 空格：%s", CStr([km itemAtIndex:2].title));
+        CHECK([[km itemAtIndex:7].title containsString:@"⌃ ⇧ H"],
+              "候选窗编码提示的键位 = ⌃ ⇧ H：%s", CStr([km itemAtIndex:7].title));
+        CHECK([[km itemAtIndex:8].title containsString:@"⌃ ⇧ ;"] &&
+              [[km itemAtIndex:10].title containsString:@"⌃ ⇧ F"] &&
+              [[km itemAtIndex:11].title containsString:@"⌃ ⇧ T"],
+              "清重码 / 简繁两项的键位与手册一致");
+        CHECK([[km itemAtIndex:13].title containsString:@"⌃ ⇧ U"] &&
+              [[km itemAtIndex:14].title containsString:@"⌃ ⇧ D"],
+              "网盘两项的键位与手册一致");
+    }
     for (NSInteger i = 0; i < (NSInteger)m.numberOfItems; i++) {
         NSString *t = [m itemAtIndex:i].title;
         CHECK([t rangeOfString:@"（"].location == NSNotFound &&
               [t rangeOfString:@"("].location == NSNotFound,
               "第 %ld 项标题不含括号说明：%s", (long)i, CStr(t));
+        /* 省略号（… / ...）的约定是「点完还得再填一步」，而全菜单**只有一个例外**：
+         * b41 的「选择主题…」确实还要再选一层（弹第二层菜单），那一项在下面单独断言；
+         * 其余项都是点一下就做完，一律不许缀。中文省略号与三个半角句点都算。 */
+        if ([t isEqualToString:@"选择主题…"]) continue;
+        CHECK([t rangeOfString:@"…"].location == NSNotFound &&
+              [t rangeOfString:@"..."].location == NSNotFound,
+              "第 %ld 项标题不缀省略号：%s", (long)i, CStr(t));
     }
+    /* 例外本身也要锁住：将来把主题入口改成「点一下就完事」（比如改成循环切下一款），
+     * 这里会当场挂 —— 提醒同步改文案与 用户手册.md。 */
+    CHECK([[[gCtl menu] itemAtIndex:10].title rangeOfString:@"…"].location != NSNotFound,
+          "主题入口缀省略号（点完还要再选一层，与其余动作项不同）");
     /* 菜单项标题反映当前开关状态（默认关） */
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
     CHECK([[[gCtl menu] itemAtIndex:2].title containsString:@"关"],
@@ -1623,7 +1993,7 @@ static void test_webdav_config_file(void)
           [c[@"pass"] isEqualToString:@"oldpass"],
           "conf 部分键与 defaults 逐键合并：%s", CStr(c));
 
-    /* ⑤ 「网盘配置…」：文件不存在 → 先按模板生成；测试模式（conf 路径被
+    /* ⑤ 「网盘配置」：文件不存在 → 先按模板生成；测试模式（conf 路径被
      *    环境变量指走）不弹 TextEdit，只给 HUD。先清掉 defaults ——
      *    合并语义下兜底键还在就会构成「已配置」，测不出模板本身的空状态。 */
     [d removeObjectForKey:@"WebDAVURL"];
@@ -1643,6 +2013,87 @@ static void test_webdav_config_file(void)
 
     [[NSFileManager defaultManager] removeItemAtPath:tmpl error:NULL];
     unsetenv("SIMPLEFLY_WEBDAV_CONF_FILE");
+}
+
+static void test_user_config_dir(void)
+{
+    puts("\n== 用户配置：打开配置目录（建目录 + 补示例 + 不覆盖已有）==");
+    NSFileManager *fm = [NSFileManager defaultManager];
+    /* 目录指到临时目录：这个动作本意是「访达打开配置目录」，绝不能让它真去碰用户
+     * ~/Library/Application Support/SimpleFly/，也不该在测试机上弹窗口。 */
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                     [NSString stringWithFormat:@"sfusercfg-%d", (int)getpid()]];
+    [fm removeItemAtPath:dir error:NULL];
+    setenv("SIMPLEFLY_USER_CONFIG_DIR", dir.fileSystemRepresentation, 1);
+    NSString *phrase = [dir stringByAppendingPathComponent:@"phrase.txt"];
+
+    /* ① 目录与短语表都不存在 → 目录建出来，并补一份带说明的示例（否则打开的是空目录） */
+    CHECK(![fm fileExistsAtPath:dir], "起始状态：配置目录不存在");
+    Fresh();
+    [gCtl openUserConfig:gClient];
+    BOOL isDir = NO;
+    CHECK([fm fileExistsAtPath:dir isDirectory:&isDir] && isDir, "点一次就把配置目录建出来");
+    NSString *s = [NSString stringWithContentsOfFile:phrase
+                                            encoding:NSUTF8StringEncoding error:NULL];
+    CHECK(s != nil && [s containsString:@"自定义快捷输入"] && [s containsString:@"编码 = 内容"],
+          "首次打开补一份带说明的短语示例");
+    CHECK(HUDText().length > 0, "测试模式不弹访达、只给 HUD：%s", CStr(HUDText()));
+    CHECK([HUDText() containsString:@"配置目录"], "HUD 点明开的是配置目录：%s", CStr(HUDText()));
+
+    /* ② 已有短语表原样不动 —— 这是「别毁用户数据」的底线，模板只在文件缺席时写 */
+    [@"abc = 我自己的短语\n" writeToFile:phrase
+                              atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    Fresh();
+    [gCtl openUserConfig:gClient];
+    s = [NSString stringWithContentsOfFile:phrase
+                                  encoding:NSUTF8StringEncoding error:NULL];
+    CHECK([s isEqualToString:@"abc = 我自己的短语\n"],
+          "已有短语表不被模板覆盖：%s", CStr(s));
+
+    [fm removeItemAtPath:dir error:NULL];
+    unsetenv("SIMPLEFLY_USER_CONFIG_DIR");
+}
+
+static void test_user_manual(void)
+{
+    puts("\n== 用户手册：随包内嵌路径解析 + 找不到时不静默 ==");
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    /* ① 路径指到一个不存在的文件 → 给提示，不能拿着空路径去调 openFile。
+     *    用环境变量预设而不是指望「测试机上恰好没有」，断言就与运行环境无关。 */
+    NSString *missing = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"sfmanual-missing-%d.md", (int)getpid()]];
+    [fm removeItemAtPath:missing error:NULL];
+    setenv("SIMPLEFLY_USER_MANUAL", missing.fileSystemRepresentation, 1);
+    Fresh();
+    [gCtl openUserManual:gClient];
+    CHECK(HUDText().length > 0, "手册不在时点菜单有提示、不静默：%s", CStr(HUDText()));
+    CHECK([HUDText() containsString:@"没找到"], "提示点明没找到手册：%s", CStr(HUDText()));
+
+    /* ② 指到一个真实存在的 md → 认得出，且测试模式只给 HUD、不开编辑器
+     *    （这个动作本意是「弹一个编辑器窗口」，测试机上绝不能真弹） */
+    NSString *md = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                    [NSString stringWithFormat:@"sfmanual-%d.md", (int)getpid()]];
+    [@"# 用户手册\n测试用正文\n" writeToFile:md atomically:YES
+                                     encoding:NSUTF8StringEncoding error:NULL];
+    /* 现在把环境变量改指到这份**真实存在**的文件上（① 那份仍是不存在的路径）。
+     * 少了这一行，env 还停在 ① 上，② 会一路报「没找到」—— 首轮就踩了这个。 */
+    setenv("SIMPLEFLY_USER_MANUAL", md.fileSystemRepresentation, 1);
+    Fresh();
+    [gCtl openUserManual:gClient];
+    CHECK([HUDText() containsString:@"用户手册"], "HUD 点明开的是用户手册：%s", CStr(HUDText()));
+    CHECK([HUDText() containsString:md], "HUD 带上环境变量指的那份路径（env 优先）：%s",
+          CStr(HUDText()));
+    CHECK([HUDText() rangeOfString:@"没找到"].location == NSNotFound,
+          "文件在就不该报没找到：%s", CStr(HUDText()));
+
+    /* ③ 同一份路径上文件被删 → 立刻回到「没找到」，不缓存上一次的判空结果 */
+    [fm removeItemAtPath:md error:NULL];
+    Fresh();
+    [gCtl openUserManual:gClient];
+    CHECK([HUDText() containsString:@"没找到"], "文件删掉后不再当作可用：%s", CStr(HUDText()));
+
+    unsetenv("SIMPLEFLY_USER_MANUAL");
 }
 
 static void test_output_trad(void){
@@ -1855,6 +2306,8 @@ int main(int argc, char **argv)
         test_output_trad();
         test_webdav_sync();
         test_webdav_config_file();
+        test_user_config_dir();
+        test_user_manual();
         test_reverse_mode();
         test_theme();
         test_code_hint();

@@ -9,6 +9,130 @@
 #include "freq.h"
 #include "s2t.h"
 #include <time.h>
+#include <stdlib.h>   /* getenv / atoi —— SFSystemIsDark 的测试出口 */
+
+/* ---- 主题：跟随系统亮暗（0.8.0） ------------------------------------- *
+ * 这两个常量与 SFSystemIsDark 放在文件最前，因为 setupState（初始化时就定主题）
+ * 比主题菜单那一段用得早。 */
+
+/* 跟随系统亮暗时的固定配对：浅色 → jade（青玉），深色 → amber（琥珀）。
+ * 这两款是同一次设计里的一对 —— 浅的那款压住纯白的刺眼，深的那款把色相整体
+ * 收在橙黄区（蓝光最少），正好对应「白天 / 夜里各自最舒服」两种诉求。
+ * 所以「跟随系统」不开放自定义，就用这一对。 */
+static NSString *const kSFThemeAutoLight = @"jade";
+static NSString *const kSFThemeAutoDark  = @"amber";
+
+/* 当前系统是否深色。
+ *
+ * SIMPLEFLY_FORCE_DARK 是给离线单测的出口（测试进程里没法改系统外观）：0 = 浅色、1 = 深色。
+ * 真机路径先看 NSApp.effectiveAppearance —— IMK 进程是普通 GUI 进程，外观跟随系统；
+ * 万一拿到无效外观，退回读全局偏好 AppleInterfaceStyle（standardUserDefaults 含全局域）。 */
+static BOOL SFSystemIsDark(void)
+{
+    const char *force = getenv("SIMPLEFLY_FORCE_DARK");
+    if (force) return atoi(force) != 0;
+
+    NSString *an = NSApp.effectiveAppearance.name;
+    if ([an isEqualToString:NSAppearanceNameDarkAqua]) return YES;
+    if ([an isEqualToString:NSAppearanceNameAqua])     return NO;
+    return [[[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"]
+            isEqualToString:@"Dark"];
+}
+
+/* 主题项要调的方法（实现在 @implementation 后半）。在这里先声明：
+ * 下面的 SFThemePopupMenu() 是个 C 函数、位于 @implementation 之前，编译器在那儿
+ * 看不到它。各款主题的 menuTheme_<名>: 不用在这里声明 —— 它按主题名现拼 selector，
+ * 不写 @selector() 字面量。 */
+@interface SimpleFlyInputController (SFThemeMenu)
+- (void)selectThemeNamed:(NSString *)name client:(id)client;
+- (void)pickThemeNamed:(NSString *)name sender:(id)sender;
+- (void)menuThemeAuto:(id)sender;
+/* 「选择主题…」那一套（0.8.0 b41）：主菜单只留一条入口，点它弹出自建的第二层菜单。
+ * 三个都先声明 —— SFThemePopupMenu() 是 @implementation 之前的 C 函数，它在
+ * themePickerMenu 的实现里被调用，而 popUpThemeMenu 又调 themePickerMenu，
+ * 不声明就是「先调后定义」。 */
+- (void)menuPickTheme:(id)sender;
+- (NSMenu *)themePickerMenu;
+- (void)popUpThemeMenu;
+@end
+
+/* ============================================================================ *
+ * 菜单命令怎么回到我们手里 —— 这一节被 0.8.0 连踩两次，眼下的写法是被逼出来的
+ *
+ * IMKInputController.h 的 282~296 行写明：用户点菜单项时，命令经
+ * -doCommandBySelector:commandDictionary: 交回来，默认实现**只看 controller 自己
+ * respondsToSelector:**，响应就 performSelector:withObject:(infoDictionary) ——
+ * **菜单项上挂的 target 它根本不读**。
+ *   ⇒ ① 任何菜单 action 都必须实现在 controller 上（这条初版就对了）；
+ *   ⇒ ② 那条路上，命令的参数是 infoDictionary，里面有两个键：
+ *        kIMKCommandMenuItemName -> 被点选的那个 NSMenuItem
+ *        kIMKCommandClientName   -> 当前 client
+ *
+ * 但**派发形态不止一种**：AppKit 也可能按常规菜单行为，直接把 action 发给菜单项的
+ * target（我们的菜单项 target 就是 controller），这时 sender 是那个 NSMenuItem、
+ * 压根不是字典。
+ *
+ * 三次踩坑记在下面 —— 症状一模一样、都极难查（**点了毫无反应**，不报错、不崩溃、
+ * 菜单项也不变灰）：
+ *   b35 —— 给每项配一个自定义 target（SFThemePicker）让它「自己记住是哪一款」。
+ *          target 活得好好的，但命令永远送不到它身上：全废。
+ *   b36 —— 改成十几项共用一个 menuThemePick:、靠 infoDictionary 里的 NSMenuItem
+ *          认领是哪一款。只覆盖了字典形态，遇到 AppKit 直调那一形态就解析不出主题名、
+ *          静默 return —— 症状与初版一字不差。
+ *   b37 —— 每款主题一个独立 selector、主题名直接编进方法名。**真机依然点了没反应**，
+ *          而诊断日志（pickThemeNamed: 的第一行）**一行都没写**。
+ *          ⇒ 这一轮排掉的正是前两轮的死因：命令不是「回来了但没认出来」，而是
+ *          **压根没回来**。方向随之翻面 —— 不再查「怎么认领」，改查「点击为什么
+ *          到不了我们」。
+ *
+ * 第 3 层防线（b38 起，三条一起上）—— 针对「点击到不了」：
+ *   ① menu.autoenablesItems = NO：不让系统替我们做可用性判定。菜单有可能被送到
+ *      **另一个进程**（菜单栏代理）去显示，那边既找不到 controller，也读不到 target
+ *      —— NSMenuItem 的 `target` 是 **weak 且不参与归档**，跨进程后是 nil。于是按
+ *      常规判定「没有对象响应这个 action」→ **置灰**；置灰的项点了当然毫无反应，
+ *      且不会触发任何回调（所以日志必然是空的）。代价：纯文本行（快捷键一览）得自己
+ *      显式置灰，见 SFAddKeyRow()。
+ *   ② -validateMenuItem: 自己回答（响应的一律 YES），并留日志。
+ *   ③ -doCommandBySelector:commandDictionary: 自己派发，不再指望 IMK 的默认实现。
+ *
+ * 第 4 层（b39）：**主题项不再放子菜单，直接平铺进主菜单。**
+ *   b38 装上「点一下就写日志」的诊断后，用户连开 11 次菜单，日志里**只有** `menu built`
+ *   （系统确实在取我们的菜单），而 `validate` / `IMK cmd` / `theme pick` **一条都没有**
+ *   ⇒ 点击没有产生任何回调。同时用 `screencapture` 抓到了菜单展开时的实拍：
+ *   **主题项根本不是灰的**（与可点的「用户手册」同色、`✓` 也正确打在当前款上）
+ *   ⇒ 「项被系统判成置灰」这条不成立。两条证据合起来只剩一个解释：
+ *   **放进子菜单的项没有被接上派发**（顶层项与子菜单项走的是两套处理）。
+ *   旁证：本机装着的鼠须管（0.15.2，能正常工作）`-menu` 里**一个子菜单都没有**，
+ *   动作全是顶层的静态 selector。
+ *   ⇒ 规矩：主菜单里**凡是需要点得动的项一律平铺**。仍留一个子菜单「快捷键一览」，
+ *   因为它是只读文本、本来就不需要派发（点不动正是它的设计）。
+ *
+ * 第 5 层（b41）：**「折叠的二级菜单」改由我们自己 popUp 出来，不用 NSMenuItem.submenu。**
+ *   平铺之后菜单 24 项、其中 15 项是主题，确实太长。想要二级就得绕开 IMK 的菜单：
+ *   主菜单里只留一条可点的「选择主题…」（顶层项，派发路径已被真机验证），在它的 action 里用
+ *   [NSMenu popUpMenuPositioningItem:atLocation:inView:] 弹出**我们自己建的**主题菜单 ——
+ *   这张菜单由 AppKit 在**本进程内**按 target-action 派发，target 有效，二级才点得动。
+ *
+ *   机制依据（翻 SDK 头文件找到的，把前面四轮的结论一次兜住）：`IMKInputController.h`
+ *   282~296 行写明 —— ① 菜单画在**系统的 Text Input Menu** 里（原文 "when a user selects a
+ *   command item from **the text input menu**"），**不是我们的进程画的** ⇒ target 跨进程必然
+ *   失效（`NSMenuItem.target` 还是 weak、不参与归档）；② 默认派发是
+ *   performSelector:withObject:(infoDictionary)，即 **IMK 自己遍历菜单、按 selector 建命令表**,
+ *   而「遍历」**只走顶层项、不进子菜单** ⇒ 子菜单叶子的 action 压根没进那张表。
+ *   这个失败模式特别坑：子菜单叶子**能正常渲染、能正确打勾、也不置灰，只是点下去静默无声**
+ *   （b37 误判成「命令回来了但没认领」、b38 误判成「项被判成置灰」，都是被它骗的）。
+ *   旁证：鼠须管 0.15.2 主二进制 `grep -a -c 'setSubmenu:'` **零命中**，而同法扫
+ *   `deploy:` / `syncUserData:` 各有 4 命中（方法有效）—— 能正常工作的同行一个子菜单都不用。
+ *
+ *   探针：`popUpMenuPositioningItem:atLocation:inView:` 只返回「**有没有**选中某一项」（BOOL），
+ *   选中了哪一项得靠 action 派发拿到。日志 `theme picker closed selected=… handled=…` 把这两件
+ *   事分开记 —— 只要真机上不出现 `selected=1 handled=0`，就说明 AppKit 在进程内派发这条路是通的，
+ *   不必再加兜底。（第一版就是在这儿栽过一次：以为返回值是选中项、想拿它兜底，编译才发现是 BOOL。）
+ *
+ * 现在的写法不再猜形态：**每款主题一个独立 selector，主题名直接编进方法名**
+ * （menuTheme_jade: 之类）。无论走哪条派发路径、sender 里有什么，**方法名本身就是
+ * 凭据**，不依赖任何运行时对象。client 另走三路兜底，见 SFMenuCommandClient()。
+ * ============================================================================ */
 
 /* IMKTextInput 协议的声明头（IMKInputSession.h）没有随 Command Line Tools 的 SDK 发布，
  * 这里只按需声明用到的方法。取光标位置就靠 attributesForCharacterIndex:lineHeightRectangle:。
@@ -47,6 +171,87 @@ static NSString *SFAppSupportDir(void)
     return [base stringByAppendingPathComponent:@"SimpleFly"];
 }
 
+/* ------------------------------------------------------------------ *
+ * 菜单命令诊断日志
+ *
+ * 起因：0.8.0 的「主题」菜单两次真机失效，而这条路径整个跑在输入法进程内部 ——
+ * 离线单测只能验证「我以为的那条派发路径」（那恰好就是失效的原因，见文件头
+ * 「菜单命令怎么回到我们手里」）。必须让真机上**实际**发生了什么可观测，
+ * 否则下一轮还是只能猜。
+ *
+ * 位置：~/Library/Application Support/SimpleFly/menu-debug.log（与用户配置同目录，
+ * 已知可写）。上限 32 KB，写满即清空重写，不会无限长大。
+ * 关掉：defaults write com.simplefly.inputmethod.SimpleFly MenuDebug -bool NO
+ * 这是排查期的临时设施，稳定后会随诊断代码一起删掉。 */
+static void SFMenuDebugLog(NSString *fmt, ...)
+{
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    if ([d objectForKey:@"MenuDebug"] && ![d boolForKey:@"MenuDebug"]) return;
+
+    va_list ap;
+    va_start(ap, fmt);
+    NSString *msg = [[NSString alloc] initWithFormat:fmt arguments:ap];
+    va_end(ap);
+
+    NSDateFormatter *df = [[NSDateFormatter alloc] init];
+    df.dateFormat = @"MM-dd HH:mm:ss";
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+                      [df stringFromDate:[NSDate date]], msg];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) return;
+
+    NSString *dir  = SFAppSupportDir();
+    NSString *path = [dir stringByAppendingPathComponent:@"menu-debug.log"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    if ([[fm attributesOfItemAtPath:path error:NULL][NSFileSize] unsignedLongLongValue] > 32 * 1024)
+        [fm removeItemAtPath:path error:NULL];
+
+    if (![fm fileExistsAtPath:path]) {
+        [fm createFileAtPath:path contents:data attributes:nil];
+        return;
+    }
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    [fh seekToEndOfFile];
+    [fh writeData:data];
+    [fh closeFile];
+}
+
+/* 菜单命令的 owner 侧：只声明我们要的那一个取值方法。
+ * 不直接写 IMKInputController 的 -client，是因为 IMKTextInput 协议头没随
+ * Command Line Tools 的 SDK 发布，直接写会缺协议声明。 */
+@protocol SFMenuOwnerClient <NSObject>
+- (id)client;
+@end
+
+/* 从菜单命令的 sender 里取出「当前输入 client」。
+ *
+ * 三路兜底 —— 派发形态不唯一（见文件头）：
+ *   ① sender 是 infoDictionary → 取 kIMKCommandClientName（IMK 转发路径）；
+ *   ② sender 本身就是 client   → 直接用它（按 IMKTextInput 的能力探测，
+ *      那个协议头没发布，不能按类型判断）；
+ *   ③ 都没拿到                 → controller 自己的 -client —— IMKInputController
+ *      一直持有当前会话的 client，这条在任何形态下都兜得住。
+ *
+ * **绝不能把 NSMenuItem 当 client 传下去**：0.8.0 b35 就是这么栽的。menuItem 会一路
+ * 传到 candidateTopLeftWithClient:，那儿虽有 respondsToSelector: 保护不至于崩，但
+ * 面板与 HUD 的定位会无声退化成「跟着鼠标走」—— 正是「点了没反应」的一大半原因。 */
+static id SFMenuCommandClient(id sender, id owner)
+{
+    if ([sender isKindOfClass:[NSDictionary class]]) {
+        id c = ((NSDictionary *)sender)[kIMKCommandClientName];
+        if (c) return c;
+    }
+    if ([sender respondsToSelector:@selector(attributesForCharacterIndex:lineHeightRectangle:)])
+        return sender;
+    if ([owner respondsToSelector:@selector(client)]) {
+        id c = [(id<SFMenuOwnerClient>)owner client];
+        if (c) return c;
+    }
+    return nil;
+}
+
 /* 用户覆盖用的码表。与 SFPhrasePath / SFS2TPath 同构：支持环境变量指到别处，
  * 这样缺码表的分支也能离线测（把它指到一个不存在的路径即可）。 */
 static NSString *SFUserDictPath(void)
@@ -82,6 +287,31 @@ static NSString *SFMislogPath(void)
     const char *env = getenv("SIMPLEFLY_MISLOG_FILE");
     if (env && *env) return [NSString stringWithUTF8String:env];
     return [SFAppSupportDir() stringByAppendingPathComponent:@"mislog.tsv"];
+}
+
+/* 用户配置目录本身（~/Library/Application Support/SimpleFly）：短语表、用户码表、
+ * 网盘配置、打错日志都住在这儿，菜单「用户配置」点开的就是它。
+ * 同样支持环境变量指到别处 —— 离线单测靠它把「打开目录」限制在临时目录里，
+ * 免得跑一次测试就在用户真实目录下生成文件、还弹一个访达窗口。 */
+static NSString *SFUserConfigDir(void)
+{
+    const char *env = getenv("SIMPLEFLY_USER_CONFIG_DIR");
+    if (env && *env) return [NSString stringWithUTF8String:env];
+    return SFAppSupportDir();
+}
+
+/* 随包内嵌的《用户手册》。普通用户是下载 Release 的 zip 装的，机器上并没有源码仓库，
+ * 所以手册必须跟着 app 走 —— build.sh 会把仓库根的 用户手册.md 拷进 Contents/Resources/。
+ * 优先级与 s2t.tsv 那套同构：环境变量（离线单测）→ bundle 资源 → 可执行文件旁边。 */
+static NSString *SFUserManualPath(void)
+{
+    const char *env = getenv("SIMPLEFLY_USER_MANUAL");
+    if (env && *env) return [NSString stringWithUTF8String:env];
+    NSString *p = [[NSBundle mainBundle] pathForResource:@"用户手册" ofType:@"md"];
+    if (p.length) return p;
+    NSString *exe = [[NSBundle mainBundle] executablePath];
+    if (exe.length == 0) return @"";
+    return [[exe stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"用户手册.md"];
 }
 
 /* 简→繁单字映射表（resources/s2t.tsv，tools/gen_s2t.py 从 OpenCC 生成）。
@@ -190,6 +420,8 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
     NSString *_pendingMiss;                 /* 被废弃、等下一次上屏来配对的码 */
     NSUInteger _maxCands;
     NSString *_themeName;                   /* 当前主题名，对应 NSUserDefaults 的 Theme */
+    BOOL _themeAuto;                        /* 主题跟随系统亮暗（ThemeAuto，默认关，见 SFSystemIsDark） */
+    BOOL _themeMenuHandled;                 /* 第二层主题菜单里这一次选择是否已被 action 处理过（兜底判重，见 popUpThemeMenu） */
     NSTimeInterval _dictWarnAt;             /* 上次弹「缺码表」提示的时间（节流用） */
 }
 
@@ -235,6 +467,10 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
                             *   defaults write com.simplefly.inputmethod.SimpleFly Theme dark
                             * 直接指定（要生效得先注销重登，让输入法进程重启）。 */
                            @"Theme":            @"metro",
+                           /* 主题跟随系统亮暗（0.8.0）：YES 时忽略上面的 Theme，
+                            * 浅色系统用 jade、深色用 amber，随系统外观实时切。
+                            * 跟随期间不写回 Theme —— 关掉跟随后回到手动挑的那款。 */
+                           @"ThemeAuto":        @NO,
                            @"PanelOffsetX":     @0.0,
                            @"PanelOffsetY":     @0.0,
                            /* 候选窗定位诊断用（真机验收项，见 README §8）：
@@ -279,11 +515,26 @@ typedef NS_ENUM(NSInteger, SFPickMode) {
     _outputTrad      = [d boolForKey:@"OutputTrad"];
 
     /* 主题名可能是用户手写的（defaults write），不在内置列表里就退回 metro，
-     * 免得面板拿到无配色对象而崩在绘制里。 */
+     * 免得面板拿到无配色对象而崩在绘制里。老版本的 aqua / google 走的也是这条回退。 */
     NSString *themeName = [d stringForKey:@"Theme"];
     if (![[SFCandidateTheme allThemeNames] containsObject:themeName]) themeName = @"metro";
+
+    /* 跟随系统亮暗：开着就用外观对应的那款盖住 Theme —— 但只盖住「当前生效」的，
+     * 不去动 d 里的 Theme 本身（那是用户手动挑的，关掉跟随时要还回去）。 */
+    _themeAuto = [d boolForKey:@"ThemeAuto"];
+    if (_themeAuto) themeName = SFSystemIsDark() ? kSFThemeAutoDark : kSFThemeAutoLight;
+
     _themeName   = themeName;
     _panel.theme = [SFCandidateTheme themeNamed:_themeName];
+
+    /* 系统亮暗切换通知。先移除再添加 —— setupState 会被离线单测反复调用
+     * （每轮 Fresh() 一次），不这么做观察者会一轮叠一个。 */
+    NSDistributedNotificationCenter *dc = [NSDistributedNotificationCenter defaultCenter];
+    [dc removeObserver:self name:@"AppleInterfaceThemeChangedNotification" object:nil];
+    [dc addObserver:self
+           selector:@selector(systemAppearanceChanged:)
+               name:@"AppleInterfaceThemeChangedNotification"
+             object:nil];
 
     NSInteger m = [d integerForKey:@"MaxCandidates"];
     _maxCands   = (m >= 1 && m <= SF_MAX_CANDS) ? (NSUInteger)m : (NSUInteger)SF_MAX_CANDS;
@@ -712,13 +963,13 @@ static NSScreen *SFScreenForRect(NSRect r)
  *     自动双向合并带来的冲突处理远超它的收益。
  * mislog.tsv 不同步 —— 那是打错日志，落本地才有隐私边界。
  *
- * 配置三件套 url/user/pass，缺一不可。主入口是状态栏菜单「网盘配置…」
+ * 配置三件套 url/user/pass，缺一不可。主入口是状态栏菜单「网盘配置」
  *（编辑 ~/Library/Application Support/SimpleFly/webdav.conf，模板自带坚果云三步引导）；
  * 旧的 defaults 三键（WebDAVURL/WebDAVUser/WebDAVPass，域
  * com.simplefly.inputmethod.SimpleFly）继续兼容 —— conf 文件对应键优先。
  * 密码明文存本机 —— 只存本机、只往配置的网盘传这两个文件。 */
 
-/* 配置文件（webdav.conf）：状态栏菜单「网盘配置…」点开就能编辑的那份。
+/* 配置文件（webdav.conf）：状态栏菜单「网盘配置」点开就能编辑的那份。
  * 放 Application Support 而不是 defaults —— 普通用户看得见、找得到、改得动，
  * 不用学 defaults write。测试用环境变量指到临时目录。 */
 static NSString *SFWebDAVConfPath(void)
@@ -728,7 +979,7 @@ static NSString *SFWebDAVConfPath(void)
     return [SFAppSupportDir() stringByAppendingPathComponent:@"webdav.conf"];
 }
 
-/* 首次点「网盘配置…」时生成的模板。整份都是注释 —— 用户去掉 # 填值，
+/* 首次点「网盘配置」时生成的模板。整份都是注释 —— 用户去掉 # 填值，
  * 解析器遇到全注释 = 未配置，行为和没建过文件完全一致。 */
 static NSString *SFWebDAVConfTemplate(void)
 {
@@ -802,7 +1053,7 @@ static NSArray<NSString *> *SFWebDAVFiles(void)
 }
 
 /* 三件套配置，缺一返回 nil（调用方给引导 HUD，别让用户对着「上传失败」猜）。
- * 来源优先级：webdav.conf（「网盘配置…」编辑的那份）→ 旧 defaults 三键（兼容）。
+ * 来源优先级：webdav.conf（「网盘配置」编辑的那份）→ 旧 defaults 三键（兼容）。
  * 每次同步时读一遍 —— 只在按菜单/快捷键时发生，代价可忽略，换来「改完即生效」。 */
 - (NSDictionary<NSString *, NSString *> *)webdavConfig
 {
@@ -954,15 +1205,15 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     });
 }
 
-/* 未配置时的引导 HUD：主推「网盘配置…」菜单（点开就是配置文件，照注释填），
+/* 未配置时的引导 HUD：主推「网盘配置」菜单（点开就是配置文件，照注释填），
  * defaults 三键留给会用命令行的用户。 */
 - (void)showWebDAVSetupHUD:(id)sender
 {
-    [self showHUD:@"未配置网盘：点输入法菜单「网盘配置…」，按文件里的注释填 url/user/pass 三项"
+    [self showHUD:@"未配置网盘：点输入法菜单「网盘配置」，按文件里的注释填 url/user/pass 三项"
            accent:YES seconds:4.0 client:sender];
 }
 
-/* 「网盘配置…」：没有配置文件就先按模板生成，再用文本编辑打开。
+/* 「网盘配置」：没有配置文件就先按模板生成，再用文本编辑打开。
  * 测试（conf 路径被环境变量指走）时只生成不开编辑器 —— 测试机不该弹 TextEdit。 */
 - (void)openWebDAVConfig:(id)sender
 {
@@ -989,14 +1240,254 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
            accent:NO seconds:3.0 client:sender];
 }
 
+/* 「用户配置」：在访达里打开配置目录，让用户自己挑要改的文件。
+ *
+ * 为什么不逐个文件做菜单项：能改的东西是「一堆文件」（phrase.txt 自定义短语、
+ * simplefly.dict 用户码表、webdav.conf 网盘），给每个都配一条菜单会让菜单越来越长，
+ * 而且用户还得先知道有这些文件。打开目录一次看全，比记路径友好。
+ *
+ * 头一次点（还没有短语表）先补一份带说明的示例 —— 否则打开一个空目录，
+ * 用户不知道该建什么文件、里面写什么。示例只在文件缺席时写，已有内容绝不覆盖。
+ *
+ * 测试模式（目录被环境变量指走）只准备文件、不开访达 —— 测试机不该弹窗口。 */
+- (void)openUserConfig:(id)sender
+{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = SFUserConfigDir();
+
+    if (![fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL]) {
+        [self showHUD:@"打不开配置目录（目录不可写？）" accent:YES seconds:2.5 client:sender];
+        return;
+    }
+
+    NSString *phrase = [dir stringByAppendingPathComponent:@"phrase.txt"];
+    if (![fm fileExistsAtPath:phrase]) {
+        if (sf_phrase_write_sample(phrase.fileSystemRepresentation))
+            NSLog(@"[SimpleFly] 自定义快捷输入示例已生成 ← %@", phrase);
+    }
+
+    if (getenv("SIMPLEFLY_USER_CONFIG_DIR")) {
+        [self showHUD:[NSString stringWithFormat:@"配置目录已就绪：%@", dir]
+               accent:NO seconds:2.5 client:sender];
+        return;
+    }
+
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir isDirectory:YES]];
+    [self showHUD:@"已打开配置目录：改 phrase.txt 加自定义短语，保存即生效"
+           accent:NO seconds:3.0 client:sender];
+}
+
+/* 「用户手册」：打开随 app 内嵌的那份手册（见 SFUserManualPath）。
+ *
+ * 开给谁看：Release 用户机器上没有源码仓库，手册只能随包走，所以 build.sh 会把
+ * 仓库根的 用户手册.md 拷进 Contents/Resources/ —— 菜单里这一项永远指得到文件。
+ *
+ * 用系统给 .md 注册的默认应用打开 —— 装了 Typora / Obsidian 之类就是它，阅读体验最好；
+ * .md 没被任何应用认领时（全新系统常见）openFile: 返回 NO，退回文本编辑看原文。
+ * 测试模式（路径被环境变量指走）只校验路径、不开窗口 —— 测试机上不该弹编辑器。 */
+- (void)openUserManual:(id)sender
+{
+    NSString *path = SFUserManualPath();
+    if (path.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        [self showHUD:@"没找到随包的用户手册，重新构建一次即可"
+               accent:YES seconds:3.0 client:sender];
+        return;
+    }
+
+    if (getenv("SIMPLEFLY_USER_MANUAL")) {
+        [self showHUD:[NSString stringWithFormat:@"用户手册已就绪：%@", path]
+               accent:NO seconds:2.5 client:sender];
+        return;
+    }
+
+    if (![[NSWorkspace sharedWorkspace] openFile:path])
+        [[NSWorkspace sharedWorkspace] openFile:path withApplication:@"TextEdit"];
+    [self showHUD:@"已打开用户手册" accent:NO seconds:2.0 client:sender];
+}
+
+/* 「快捷键一览」子菜单里的一行：功能名 + 键位。
+ *
+ * 键位刻意**不走 keyEquivalent** —— 那是「这个菜单项绑定了一个键」的意思，会真的参与
+ * 按键匹配；而一览里的项是纯说明。何况这里面混着「清空重码记忆」这种破坏性动作
+ * （菜单里点一下就删 freq.txt 太危险）和「先选中文字再按」这种条件动作（点了没反应）。
+ * 所以它们一律不带 action（NSMenu 自动置灰，点击无效），键位只能作为**文本**写进标题。
+ *
+ * 对齐：菜单标题支持制表符，但比例字体下渲染不可控，改用按显示宽度补空格 ——
+ * 「中文算 2、其余算 1」估算，把键位推到同一列。差几个像素不影响读。 */
+static void SFAddKeyRow(NSMenu *menu, NSString *what, NSString *keys)
+{
+    NSUInteger w = 0;
+    for (NSUInteger i = 0; i < what.length; i++) {
+        unichar c = [what characterAtIndex:i];
+        w += (c >= (unichar)0x2E80) ? 2 : 1;      /* CJK 起算全角 */
+    }
+    static const NSUInteger kKeyColumn = 24;
+
+    NSMutableString *title = [what mutableCopy];
+    for (NSUInteger i = w; i < kKeyColumn; i++) [title appendString:@" "];
+    [title appendString:keys];
+
+    /* 显式置灰：这几行是**只读速查文本**，不是可点动作。菜单现在 autoenablesItems = NO
+     * （见 -menu 的第 3 层防线 ①），系统不再替无 action 的项自动置灰，得自己来 ——
+     * 这些行里含「清空重码记忆」这类破坏性动作，做成可点会造成误触。 */
+    NSMenuItem *row = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+    row.enabled = NO;
+    [menu addItem:row];
+}
+
+#pragma mark 主题菜单
+
+/* 第二层主题菜单 —— 由 -popUpThemeMenu 在**我们自己的进程里**弹出来（不是 IMK 子菜单！
+ * 理由见文件头第 5 层）。
+ *
+ * 布局：置灰小标题 + 13 款（当前款打勾）+ 分隔线 + 「跟随系统亮暗」。
+ * 这里**不给每项加「主题：」前缀** —— 那是平铺进主菜单时才需要的（一列 metro / jade
+ * 混在 24 项里不知道是什么）；在这张专供选主题的菜单里语境已经给足，再缀一遍就是
+ * 13 行重复。标题就是主题名本身。
+ *
+ * 每项一个**独立 selector**（menuTheme_<主题名>:），主题名编进方法名、不靠
+ * representedObject 认领 —— 理由见文件头「菜单命令怎么回到我们手里」。这里虽由 AppKit
+ * 在进程内派发、sender 一定是 NSMenuItem，但保持同一套写法就不必再区分派发路径。 */
+static NSMenu *SFThemePopupMenu(SimpleFlyInputController *owner,
+                                NSString *current, BOOL autoOn)
+{
+    NSMenu *t = [[NSMenu alloc] initWithTitle:@"选择主题"];
+    /* 同 -menu：可用性不交给系统。代价是纯只读行要自己置灰（下面的小标题）。 */
+    t.autoenablesItems = NO;
+
+    /* 置灰小标题：一眼看出这张菜单是干什么的。与「快捷键一览」里的只读行同款 ——
+     * 无 action + 显式 enabled = NO。 */
+    NSMenuItem *hdr = [[NSMenuItem alloc] initWithTitle:@"候选窗配色" action:nil
+                                          keyEquivalent:@""];
+    hdr.enabled = NO;
+    [t addItem:hdr];
+
+    for (NSString *n in [SFCandidateTheme allThemeNames]) {
+        /* selector 按主题名现拼（与 SF_THEME_ACTION 展开出的那批方法一一对应）。
+         * 拼错的代价是「点这一项没反应」，所以 controller_test 里有一条断言逐款校验
+         * controller 真的响应 menuTheme_<名>: —— 只加主题、忘了加方法会当场挂测试。 */
+        SEL act = NSSelectorFromString([NSString stringWithFormat:@"menuTheme_%@:", n]);
+        NSMenuItem *it = [[NSMenuItem alloc] initWithTitle:n action:act keyEquivalent:@""];
+        it.target = owner;
+        /* 主题名也存一份到 representedObject：给诊断日志用，也让「菜单项 → 主题名」
+         * 这层对应在运行时可见（popUpThemeMenu 的兜底路径直接拿它切主题）。 */
+        it.representedObject = n;
+        /* 当前生效的那款打勾。跟随系统开着时由系统决定用哪款，不该假装某一款被选中 ——
+         * 那列不打勾，状态只体现在下面那条「跟随系统亮暗」上。 */
+        it.state = (!autoOn && [n isEqualToString:current]) ? NSControlStateValueOn
+                                                            : NSControlStateValueOff;
+        [t addItem:it];
+    }
+
+    [t addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem *autoIt = [[NSMenuItem alloc] initWithTitle:@"跟随系统亮暗"
+                                                    action:@selector(menuThemeAuto:)
+                                             keyEquivalent:@""];
+    autoIt.target = owner;
+    autoIt.state = autoOn ? NSControlStateValueOn : NSControlStateValueOff;
+    [t addItem:autoIt];
+
+    return t;
+}
+
+/* 子菜单按「模式开关 / 查码与候选窗 / 简繁 / 网盘同步」四段排，与 用户手册 §四 同序同措辞 ——
+ * 手册和这里对不上就等于两边都不可信。 */
+static NSMenu *SFShortcutMenu(void)
+{
+    NSMenu *k = [[NSMenu alloc] initWithTitle:@"快捷键一览"];
+    k.autoenablesItems = NO;    /* 灰不灰由 SFAddKeyRow() 显式决定，不让系统插手 */
+
+    SFAddKeyRow(k, @"中 / 英 切换",        @"单敲 ⇧");
+    SFAddKeyRow(k, @"中英标点切换",        @"⌃ .");
+    SFAddKeyRow(k, @"全 / 半角切换",       @"⇧ 空格");
+
+    [k addItem:[NSMenuItem separatorItem]];
+    SFAddKeyRow(k, @"查编码模式 开 / 关",   @"⌃ /");
+    SFAddKeyRow(k, @"选中文字查音形码",     @"⌃ ⇧ /");
+    SFAddKeyRow(k, @"候选窗配色主题循环",   @"⌃ ;");
+    SFAddKeyRow(k, @"候选窗编码提示 开 / 关", @"⌃ ⇧ H");
+    SFAddKeyRow(k, @"清空重码记忆",        @"⌃ ⇧ ;");
+
+    [k addItem:[NSMenuItem separatorItem]];
+    SFAddKeyRow(k, @"选中文字简繁互转",     @"⌃ ⇧ F");
+    SFAddKeyRow(k, @"输出 简 / 繁 切换",    @"⌃ ⇧ T");
+
+    [k addItem:[NSMenuItem separatorItem]];
+    SFAddKeyRow(k, @"同步到网盘",          @"⌃ ⇧ U");
+    SFAddKeyRow(k, @"从网盘恢复",          @"⌃ ⇧ D");
+
+    return k;
+}
+
 /* 状态栏菜单（点菜单栏输入法名字弹出的那个）—— 手动同步的主入口，对普通用户
- * 比记快捷键友好；快捷键保留给顺手党，菜单项上同时标出等价键。
- * IMK 约定：menu 返回 autoreleased 菜单；菜单项 action 经 doCommandBySelector:
- * 回来时参数是 infoDictionary（含 kIMKCommandClientName），不是 client 本身 ——
- * 所以每个菜单动作都要从字典里取 client 再调真正的实现。 */
+ * 比记快捷键友好；快捷键保留给顺手党，菜单项上同时标出等价键，
+ * 键位全集收在末尾的「快捷键一览」子菜单里（省得为了记一个组合键去翻手册），
+ * 全文则在紧跟其后的「用户手册」项。
+ *
+ * 标题的省略号：约定是「点完还得再填一步」，**全菜单只有一个例外** ——
+ * 其余项都是「点一下就做完」的动作（开目录、开配置文件、开手册），一律不缀省略号；
+ * 唯独 b41 起的「选择主题…」是真的还要再选一层（弹出第二层菜单），缀上才符合预期。
+ * 测试按这条锁死（controller_test 的 test_webdav_sync：逐项断言不缀省略号，再单独
+ * 断言「选择主题…」**必须**缀）。
+ *
+ * IMK 约定：menu 返回 autoreleased 菜单；菜单项 action 交回来时 sender 可能是
+ * infoDictionary、也可能就是 NSMenuItem 本身（两种形态，见文件头那一节）——
+ * 所以每个菜单动作都从参数里取 client，统一走 SFMenuCommandClient() 兜底。
+ * 「主题」那十几项更进一步，把主题名编进了 selector，不依赖参数里有什么。 */
+
+/* 菜单命令的兜底入口 —— 第 3 层防线 ③（见文件头）。
+ *
+ * IMKInputController 自带一份默认实现：只看 controller 自己 respondsToSelector:、
+ * 响应就把 infoDictionary 当参数发过去。理论上够用，可是 b35~b37 三轮真机全废，
+ * 而诊断日志证明**命令压根没到**（默认实现没被触发）。索性自己实现一份，把这条路径
+ * 握在手里，顺带把经过这儿的每条命令记进日志 —— 这是判断「点击到底走不走这条路」的
+ * 唯一证据来源。
+ *
+ * 只接管自己的菜单动作（selector 一律以 menu 开头），其余转回 super：IMK 也可能用
+ * 这个方法送别的命令，一律截胡会改变原有行为。 */
+- (void)doCommandBySelector:(SEL)aSelector commandDictionary:(NSDictionary *)infoDictionary
+{
+    NSString *sel = aSelector ? NSStringFromSelector(aSelector) : @"(null)";
+    SFMenuDebugLog(@"IMK cmd %@ sender=%@", sel,
+                   infoDictionary ? NSStringFromClass([infoDictionary class]) : @"(nil)");
+
+    if ([sel hasPrefix:@"menu"] && [self respondsToSelector:aSelector]) {
+        IMP imp = [self methodForSelector:aSelector];
+        if (imp) {
+            ((void (*)(id, SEL, id))imp)(self, aSelector, infoDictionary);
+            return;
+        }
+    }
+    [super doCommandBySelector:aSelector commandDictionary:infoDictionary];
+}
+
+/* 菜单项可用性 —— 第 3 层防线 ②（见文件头）。
+ *
+ * 实现本方法＝告诉 AppKit「这个对象自己回答可用性」，于是它不再去响应链里找 target
+ * （跨进程显示菜单时那条链上根本没有我们，见文件头）。响应得动的动作一律放行。
+ * 留一行日志是为了把「根本没被问」和「问了但没放行」分开 —— 这两种在真机上
+ * 表现完全一样，都是「点了没反应」。 */
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    SEL a = item.action;
+    SFMenuDebugLog(@"validate %@ enabled=%d", a ? NSStringFromSelector(a) : @"(nil)",
+                   (int)item.isEnabled);
+    if (a == NULL) return YES;          /* 纯文本行，灰不灰由自己控制（见 SFAddKeyRow） */
+    return [self respondsToSelector:a];
+}
+
 - (NSMenu *)menu
 {
     NSMenu *m = [[NSMenu alloc] initWithTitle:@"SimpleFly"];
+
+    /* 第 3 层防线 ①（见文件头）：**菜单的可用性判定不交给系统**。
+     * 菜单有可能被送到菜单栏代理进程去显示，那边既找不到我们的 controller、也读不到
+     * target（`target` 是 weak 且不参与归档，跨进程后是 nil），按常规判定就会把每一项
+     * 判成「没有对象响应这个 action」→ 置灰。置灰的项点了毫无反应、且不产生任何回调，
+     * 正是「日志一片空白」的由来。
+     * 代价：纯文本行（快捷键一览）不再自动变灰 —— 由 SFAddKeyRow() 自己置灰。 */
+    m.autoenablesItems = NO;
 
     /* 自更新：菜单点一下，后台分离进程跑 tools/self_update.sh。
      * 脚本自动二选一：本机有 git 仓库 → 拉取+构建+安装（开发者）；
@@ -1030,7 +1521,7 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     up.target = self;
     [m addItem:up];
 
-    NSMenuItem *down = [[NSMenuItem alloc] initWithTitle:@"从网盘恢复…"
+    NSMenuItem *down = [[NSMenuItem alloc] initWithTitle:@"从网盘恢复"
                                                   action:@selector(menuWebDAVSyncDown:)
                                            keyEquivalent:@"d"];
     down.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagShift;
@@ -1038,20 +1529,115 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     [m addItem:down];
 
     /* 网盘配置：点开生成 + 编辑 webdav.conf —— 普通用户的主配置入口，
-     * 不用碰 defaults 命令行。放最后，前两项是高频动作。 */
-    NSMenuItem *conf = [[NSMenuItem alloc] initWithTitle:@"网盘配置…"
+     * 不用碰 defaults 命令行。跟在同步那两项后面，前面都是日常高频动作。 */
+    NSMenuItem *conf = [[NSMenuItem alloc] initWithTitle:@"网盘配置"
                                                   action:@selector(menuWebDAVConfig:)
                                            keyEquivalent:@""];
     conf.target = self;
     [m addItem:conf];
+
+    /* 用户配置：配置目录的整体入口（短语表 / 用户码表 / 网盘配置都在里面）。
+     * 前面是日常动作与网盘那组，这条是「我要找文件改」时才点的。 */
+    NSMenuItem *userConf = [[NSMenuItem alloc] initWithTitle:@"用户配置"
+                                                     action:@selector(menuUserConfig:)
+                                              keyEquivalent:@""];
+    userConf.target = self;
+    [m addItem:userConf];
+
+    /* 快捷键一览：把 用户手册 §四 的键位原样搬进菜单，不用为了记一个组合键去翻文档。
+     * 父项无 action 也能展开（有 submenu 即可），子项则统一置灰只读，
+     * 见 SFShortcutMenu() 的注释。 */
+    NSMenuItem *keys = [[NSMenuItem alloc] initWithTitle:@"快捷键一览"
+                                                  action:nil
+                                           keyEquivalent:@""];
+    keys.submenu = SFShortcutMenu();
+    [m addItem:keys];
+
+    /* 用户手册：打开随包内嵌的手册（见 openUserManual）。与「快捷键一览」并作菜单末尾的
+     * 一组参考信息 —— 速查在前（一览能覆盖的就不用开文档），全文殿后。 */
+    NSMenuItem *manual = [[NSMenuItem alloc] initWithTitle:@"用户手册"
+                                                    action:@selector(menuUserManual:)
+                                             keyEquivalent:@""];
+    manual.target = self;
+    [m addItem:manual];
+
+    /* 主题：主菜单里只留**一条**入口，点它弹出第二层菜单（SFThemePopupMenu）。
+     * 平铺过一版（b39：13 款 + 跟随共 15 项直接摊在主菜单里）—— 能点，但太长，
+     * 24 项里 15 项是主题。二级菜单又不能交给 IMK（子菜单项点了没反应，见文件头第 4 层），
+     * 只能由我们自己 popUp，见文件头第 5 层。
+     * 前面加一条分隔线：这一组是「外观偏好」，与上面的动作项分开读。 */
+    [m addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *themeIt = [[NSMenuItem alloc] initWithTitle:@"选择主题…"
+                                                    action:@selector(menuPickTheme:)
+                                             keyEquivalent:@""];
+    themeIt.target = self;
+    [m addItem:themeIt];
+
+    /* 系统每次要显示这个菜单都会调本方法 —— 这条日志能证明「我们的菜单确实被取走了」。
+     * 与 doCommandBySelector: 的日志配合，就能把「菜单压根没被取走」和
+     * 「菜单取走了、但点击没回来」两种情形分开。 */
+    SFMenuDebugLog(@"menu built items=%lu theme=%@ auto=%d",
+                   (unsigned long)m.numberOfItems, _themeName, (int)_themeAuto);
 
     /* ARC 下非 init/copy 族方法返回新造对象会自动按 +0 约定 autorelease，
      * 直接 return 即可，不需要也不允许显式 autorelease。 */
     return m;
 }
 
+/* ====================== 第二层主题菜单（b41） ======================
+ *
+ * 「选择主题…」被点中 —— 注意**这一层仍然是 IMK 的顶层项**，走的是已经真机验证过的
+ * 派发路径（b39 起顶层项全通），所以这个方法一定会被调到。
+ *
+ * 它自己不选主题，而是把选择交给**我们自己弹出的**菜单：那张菜单由 AppKit 在进程内按
+ * target-action 派发，可靠；而 IMK 的 NSMenuItem.submenu 点了不会有任何回调
+ * （机制见文件头第 4、5 层）。 */
+
+/* 供 -popUpThemeMenu 与单测共用的一层壳 —— 单测没法点菜单，但能直接拿这张菜单
+ * 逐项断言（行数、标题、selector、打勾）。 */
+- (NSMenu *)themePickerMenu
+{
+    return SFThemePopupMenu(self, _themeName, _themeAuto);
+}
+
+- (void)menuPickTheme:(id)sender
+{
+    SFMenuDebugLog(@"theme picker open sender=%@", NSStringFromClass([sender class]));
+    [self popUpThemeMenu];
+}
+
+- (void)popUpThemeMenu
+{
+    NSMenu *t = [self themePickerMenu];
+
+    /* 位置取当前鼠标点：用户刚在这一项上点下「选择主题…」，指针就在那一项上，于是第二层
+     * 菜单在指针处展开 —— 视觉上就是一次正常的级联展开（不是悬停级联，得点一下）。
+     * view 传 nil ⇒ atLocation 走**屏幕坐标**，与 [NSEvent mouseLocation] 同一套原点
+     * 约定；贴近屏幕顶端时 AppKit 自己会把菜单夹回屏幕内，不用我们处理。 */
+    _themeMenuHandled = NO;
+
+    /* popUp... 是**同步**的：它自己跑菜单跟踪循环，直到用户选完（或按 Esc、点别处）才返回。
+     * 注意它返回的是 **BOOL（有没有选中某一项）**、不是选中项本身 —— 选中了哪一项不在这条
+     * 返回值里，只能靠 action 派发拿到。 */
+    BOOL selected = [t popUpMenuPositioningItem:nil
+                                     atLocation:[NSEvent mouseLocation]
+                                         inView:nil];
+
+    /* 这两半合起来是个精确探针（第一版这里本来还想拿返回值兜底，编译才发现它返回 BOOL）：
+     *   selected=1 handled=1 —— 正常，AppKit 在进程内把 action 派给了 target；
+     *   selected=1 handled=0 —— 用户选了、action 却没派出去（target 是 weak、跨进程、
+     *                          菜单收尾时被清掉…）。**真机上只要没见过这个组合就不用加
+     *                          兜底路径**；真见到了，再补一条（比如自己记住选中项，
+     *                          或改用 NSMenu 的 delegate 回调）。 */
+    SFMenuDebugLog(@"theme picker closed selected=%d handled=%d",
+                   (int)selected, (int)_themeMenuHandled);
+}
+
 - (void)menuToggleCodeHint:(id)sender
 {
+    /* 顶层菜单项的探针日志：与「主题」子菜单的日志一对照，就能分清
+     * 「所有菜单项都点不动」和「只有子菜单点不动」。 */
+    SFMenuDebugLog(@"menu toggle code hint sender=%@", NSStringFromClass([sender class]));
     id client = [sender isKindOfClass:[NSDictionary class]]
                 ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
     [self toggleCodeHint:client ?: sender];
@@ -1076,6 +1662,75 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     id client = [sender isKindOfClass:[NSDictionary class]]
                 ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
     [self openWebDAVConfig:client ?: sender];
+}
+
+- (void)menuUserConfig:(id)sender
+{
+    id client = [sender isKindOfClass:[NSDictionary class]]
+                ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
+    [self openUserConfig:client ?: sender];
+}
+
+- (void)menuUserManual:(id)sender
+{
+    id client = [sender isKindOfClass:[NSDictionary class]]
+                ? ((NSDictionary *)sender)[kIMKCommandClientName] : sender;
+    [self openUserManual:client ?: sender];
+}
+
+/* ============================ 主题菜单的动作实现 ============================
+ *
+ * 每款主题一个**独立 selector**，pickThemeNamed: 的主题名来自**方法名本身**、
+ * 完全不读 sender —— 这就是连踩两次换来的结论（详见文件头那一节）。
+ *
+ * 增删主题时这里要与 SFCandidateTheme 的 kThemes 一起改：只往 kThemes 加一款、
+ * 忘了在这里加方法，那一款就会「点了没反应」（selector 拼得出、但 controller
+ * 不响应它）。test_theme 有断言逐款校验 respondsToSelector:，漏了会当场挂测试。 */
+#define SF_THEME_ACTION(_name)                                            \
+    - (void)menuTheme_##_name:(id)sender                                  \
+    {                                                                     \
+        [self pickThemeNamed:@#_name sender:sender];                       \
+    }
+
+SF_THEME_ACTION(metro)
+SF_THEME_ACTION(jade)
+SF_THEME_ACTION(blossom)
+SF_THEME_ACTION(linen)
+SF_THEME_ACTION(paper)
+SF_THEME_ACTION(ink)
+SF_THEME_ACTION(contrast)
+SF_THEME_ACTION(dark)
+SF_THEME_ACTION(mojave_dark)
+SF_THEME_ACTION(amber)
+SF_THEME_ACTION(neon)
+SF_THEME_ACTION(retro)
+SF_THEME_ACTION(luna)
+
+#undef SF_THEME_ACTION
+
+/* 菜单里点中一款主题（或拿到一个不认识的名称），都落到这里。
+ *
+ * 名称不是内置主题就什么都不做 —— 但**不能静默**：真机上排查「点了没反应」时，
+ * 这条提示与 SFMenuDebugLog 的日志是仅有的两个证据来源。 */
+- (void)pickThemeNamed:(NSString *)name sender:(id)sender
+{
+    /* 标记「第二层菜单里这一次选择已经落到实处」—— popUpThemeMenu 靠它决定要不要走
+     * 返回值兜底那一路（见那里的注释）。 */
+    _themeMenuHandled = YES;
+    SFMenuDebugLog(@"theme pick name=%@ sender=%@", name, NSStringFromClass([sender class]));
+    if (![[SFCandidateTheme allThemeNames] containsObject:name]) {
+        [self showHUD:[NSString stringWithFormat:@"没有这款主题：%@", name]
+                accent:YES client:SFMenuCommandClient(sender, self)];
+        return;
+    }
+    [self selectThemeNamed:name client:SFMenuCommandClient(sender, self)];
+}
+
+- (void)menuThemeAuto:(id)sender
+{
+    _themeMenuHandled = YES;    /* 同上：这是在第二层菜单里点下的 */
+    SFMenuDebugLog(@"theme auto toggle sender=%@", NSStringFromClass([sender class]));
+    [self toggleThemeAutoWithClient:SFMenuCommandClient(sender, self)];
 }
 
 - (void)menuUpdate:(id)sender
@@ -1475,26 +2130,85 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
            accent:_reverseMode client:sender];
 }
 
-/* 主题切换：在内置主题里循环（metro → dark → paper → …），并写回 NSUserDefaults 记住。
+/* 主题切换：菜单选款 / Ctrl+; 循环 / 跟随系统，三条路都落到这里。
  *
  * 刻意不清空组字状态 —— 换主题只是换外观，不该打断正在打的字：
  *   正在组字（候选窗开着）→ 重绘候选窗，立刻看到新配色；
  *   没在组字            → 用 HUD 报一下当前主题名。
  * 分号在组字里是「次选」，但那条路要求不带 Ctrl，与本键位不冲突。 */
+- (void)selectThemeNamed:(NSString *)name client:(id)client
+{
+    if (![[SFCandidateTheme allThemeNames] containsObject:name]) return;
+
+    /* 手动选款 = 退出「跟随系统亮暗」。否则用户刚挑的那款会被下一次外观变化
+     * 直接覆盖掉，看起来像「选了没用」。 */
+    if (_themeAuto) {
+        _themeAuto = NO;
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ThemeAuto"];
+    }
+
+    _themeName = name;
+    [[NSUserDefaults standardUserDefaults] setObject:name forKey:@"Theme"];
+    _panel.theme = [SFCandidateTheme themeNamed:name];
+
+    if (_cands.count > 0) [self showPanelWithClient:client];     /* 立刻看到新配色 */
+    else [self showHUD:[NSString stringWithFormat:@"主题：%@", name]
+                accent:NO client:client];
+}
+
+/* Ctrl+;：按数组顺序循环到下一款（前半浅色、后半深色，转一圈有昼夜过渡）。
+ * 与菜单里手动选款同义 —— 也要退出跟随，所以直接复用 selectThemeNamed:。 */
 - (void)toggleTheme:(id)sender
 {
     NSArray<NSString *> *names = [SFCandidateTheme allThemeNames];
     NSUInteger i = [names indexOfObject:_themeName];
     if (i == NSNotFound) i = 0;
-    i = (i + 1) % names.count;
+    [self selectThemeNamed:names[(i + 1) % names.count] client:sender];
+}
 
-    _themeName = names[i];
-    [[NSUserDefaults standardUserDefaults] setObject:_themeName forKey:@"Theme"];
-    _panel.theme = [SFCandidateTheme themeNamed:_themeName];
+/* 跟随系统亮暗：只换当前生效的配色，**不写回 NSUserDefaults 的 Theme**。
+ * Theme 记的是「用户手动挑的那款」—— 跟随期间它该原封不动，等用户关掉跟随时再回到
+ * 那款；若把自动值也写进去，用户手动挑的偏好就被悄悄冲掉了。
+ * 外层外观变化由 systemAppearanceChanged: 触发；这里不弹 HUD（切系统外观时蹦出一条
+ * 输入法提示很打扰）。 */
+- (void)applyAutoTheme
+{
+    if (!_themeAuto) return;
+    NSString *want = SFSystemIsDark() ? kSFThemeAutoDark : kSFThemeAutoLight;
+    if ([_themeName isEqualToString:want]) return;
+    _themeName = want;
+    _panel.theme = [SFCandidateTheme themeNamed:want];
+    /* 不重绘候选窗：下一次按键或下一次显示候选自然会用上新配色。
+     * 这里没有 client，硬调 showPanelWithClient: 反而可能拿到空 client。 */
+}
 
-    if (_cands.count > 0) [self showPanelWithClient:sender];     /* 立刻看到新配色 */
-    else [self showHUD:[NSString stringWithFormat:@"主题：%@", _themeName]
-                accent:NO client:sender];
+/* 系统亮暗切换（分布式通知）。IMK 进程收得到，重算一次即可。 */
+- (void)systemAppearanceChanged:(NSNotification *)note
+{
+    (void)note;
+    [self applyAutoTheme];
+}
+
+/* 菜单「跟随系统亮暗」：翻转开关。开启时立刻套用当前外观对应的那款；
+ * 关闭时回到用户手动挑的那款（Theme），而不是停在自动值上。 */
+- (void)toggleThemeAutoWithClient:(id)client
+{
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    _themeAuto = !_themeAuto;
+    [d setBool:_themeAuto forKey:@"ThemeAuto"];
+
+    if (_themeAuto) {
+        [self applyAutoTheme];
+        [self showHUD:[NSString stringWithFormat:@"主题跟随系统：%@", _themeName]
+                accent:NO client:client];
+        return;
+    }
+
+    NSString *manual = [d stringForKey:@"Theme"];
+    if (![[SFCandidateTheme allThemeNames] containsObject:manual]) manual = @"metro";
+    _themeName = manual;
+    _panel.theme = [SFCandidateTheme themeNamed:manual];
+    [self showHUD:[NSString stringWithFormat:@"主题：%@", manual] accent:NO client:client];
 }
 
 #pragma mark 按键

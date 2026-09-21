@@ -17,7 +17,9 @@ fi
 # 二进制不重建 app，版本号没动导致 14=14 的自检照样通过，真机跑的还是旧逻辑）。
 echo "==> 二进制新鲜度自检"
 BIN="$SRC/Contents/MacOS/SimpleFly"
-STALE=$(find "$ROOT/src" "$ROOT/resources" -type f -newer "$BIN" 2>/dev/null | head -5 || true)
+# 用户手册也算：它会被 build.sh 拷进 bundle，改了手册没重构建的话，菜单「用户手册」
+# 打开的还是上一版正文（比「改了代码没 build」更难察觉，一并纳入判据）。
+STALE=$(find "$ROOT/src" "$ROOT/resources" "$ROOT/用户手册.md" -type f -newer "$BIN" 2>/dev/null | head -5 || true)
 if [ -n "$STALE" ]; then
   echo "    ✗ 以下源文件比 build/SimpleFly.app 新，先跑 ./build.sh 再 install：" >&2
   echo "$STALE" | sed 's/^/      /' >&2

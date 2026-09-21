@@ -39,7 +39,7 @@ CFLAGS=(-O2 -Wall -Wextra -Wno-unused-command-line-argument
 # 只在一种场景用到：
 #   SIMPLEFLY_ARCH=x86_64 ./build.sh --test   在 M 系列机上预演「移植到 Intel」
 #                                             （Rosetta 下跑同一套单测，验证 x86 语义）
-# 实测 571 项全通过。产物不能直接跨机器安装 —— arm64 二进制在 Intel 上加载不了，
+# 实测 727 项全通过。产物不能直接跨机器安装 —— arm64 二进制在 Intel 上加载不了，
 # 换机器只能拷源码重编译（详见 用户手册.md §九）。
 #
 # 注意：这里必须判空后再前置展开，不能写 "${ARR[@]}"。
@@ -116,6 +116,17 @@ build_app() {
     echo "    自更新脚本: tools/self_update.sh"
   else
     echo "    ! 缺少 tools/self_update.sh" >&2
+  fi
+
+  # 用户手册：随包内嵌，菜单「用户手册」点开的就是它（SFUserManualPath）。
+  # 普通用户装的是 Release 的 zip，机器上没有源码仓库 —— 手册不跟着 app 走就等于没有。
+  # 这里拷的是仓库根的 用户手册.md，改完手册必须重跑 build.sh，否则装下去的还是旧版；
+  # install.sh 的「二进制新鲜度自检」把 用户手册.md 也算进了过期判据。
+  if [ -f "$ROOT/用户手册.md" ]; then
+    cp "$ROOT/用户手册.md" "$APP/Contents/Resources/用户手册.md"
+    echo "    用户手册: $(wc -l < "$ROOT/用户手册.md" | tr -d ' ') 行"
+  else
+    echo "    ! 缺少 用户手册.md，菜单「用户手册」会提示找不到" >&2
   fi
 
   if [ -f "$DICT" ]; then

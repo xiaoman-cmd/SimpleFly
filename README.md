@@ -76,6 +76,7 @@ cd /path/to/simplefly
 | **`Ctrl` + `.`** | **中英标点切换**（，。 ↔ ,.） | `switches: ascii_punct` |
 | **`Shift` + `空格`** | **全 / 半角切换**（全角时空格变全角空格） | `switches: full_shape` |
 | **`Ctrl` + `/`** | **查编码模式**开 / 关：输入拼音（或双拼码）查字，候选上标出音形码（详见下） | 官方没有对应物，是本实现为「不会打的字」加的 |
+| **`Ctrl` + `;`** | **候选窗配色主题循环切换**（13 套，按「日用 → 夜用」排） | 官方没有对应物；也可点输入法菜单「选择主题…」，在弹出来的第二层菜单里直接挑（末条是「跟随系统亮暗」）（隐含 `Ctrl+Shift+;` 是清空重码记忆） |
 
 ### 标点表覆盖的键
 
@@ -281,13 +282,13 @@ killall SimpleFly
 ```text
 点菜单栏输入法名字 → 「同步到网盘」   本地 → 云端（Ctrl+Shift+U）
                     「从网盘恢复」   云端 → 本地（Ctrl+Shift+D）
-                    「网盘配置…」    生成/编辑 webdav.conf（0.5.9）
+                    「网盘配置」    生成/编辑 webdav.conf（0.5.9）
 ```
 
 | 细节 | 说明 |
 |---|---|
 | 同步内容 | `phrase.txt` + `freq.txt`；mislog 不同步（隐私） |
-| 配置 | 主入口：菜单「网盘配置…」→ 自动生成并打开 `~/Library/Application Support/SimpleFly/webdav.conf`（模板自带坚果云三步引导，改完即生效不重启）；兼容旧 defaults 三键 `WebDAVURL`（指向网盘里**已建好的英文文件夹**）/ `WebDAVUser` / `WebDAVPass`（**应用密码**），conf 键逐项优先 |
+| 配置 | 主入口：菜单「网盘配置」→ 自动生成并打开 `~/Library/Application Support/SimpleFly/webdav.conf`（模板自带坚果云三步引导，改完即生效不重启）；兼容旧 defaults 三键 `WebDAVURL`（指向网盘里**已建好的英文文件夹**）/ `WebDAVUser` / `WebDAVPass`（**应用密码**），conf 键逐项优先 |
 | 恢复保护 | 全部拉到临时目录成功才替换本地；原件备份 `.bak`；任一失败本地不动 |
 | 错误提示 | 401=密码不是应用密码；403/404/405/409 统一提示「目录不存在」（坚果云父目录缺失全在这组） |
 | 不做 | 自动同步、双向合并——手动两键整体覆盖，冲突面为零；输入法进程不挂常驻网络任务 |
@@ -316,7 +317,7 @@ killall SimpleFly
 | 配置保全 | **绝不删除** `~/Library/Application Support/SimpleFly`（phrase.txt / simplefly.dict / webdav.conf / freq.txt），也绝不 `defaults delete`；更新前只做一份时间戳备份供回滚 |
 | 反馈 | 菜单点击即弹 HUD「已在后台启动更新…」；成功/失败用系统通知；全程日志在 `/tmp/simplefly_update.log` |
 | 自定义仓库路径 | 默认 `/Users/phoenix/WorkBuddy/SimpleFly`；终端 `defaults write com.simplefly.inputmethod.SimpleFly UpdateRepo /你的/仓库/路径` 可覆盖（仅影响源码模式） |
-| 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.7.3`） |
+| 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.8.0`） |
 | 发 Release | 出包后跑 `GH_TOKEN=<PAT> ./tools/publish_release.sh`（可选 `--body <说明.md>`、`--repo owner/name`）。脚本自己读版本号、确认 tag 已 push、**同 tag 已有 Release 就拒绝重跑**、建 Release、传 asset，最后做**匿名端到端复核**（latest tag / 体积 / sha256 / 解压后版本号与签名）。PAT 需 **Contents: Read and write**（fine-grained → Repository permissions 那份），只走环境变量不落盘 |
 
 ### 简繁转换（0.5.4 最简版；0.5.6 双向 + 直接繁体输出）
@@ -352,7 +353,7 @@ nihao           打字时候选窗文字底下多一行小字 = 当前高亮候�
 | 显示内容 | **高亮候选**的完整音形码：单字带中点拆分（`hc·nz`），词语显示整词编码；复用 `noteForText:`（查编码模式同一套） |
 | 开关 | `CodeHint`（默认关）。`showPanelWithClient` **实时读 defaults** —— 改完下一个候选窗即生效，不用 `killall`。三个入口等价：`Ctrl+Shift+H` / 输入法菜单 / defaults |
 | 自动隐藏 | 标点候选无编码 → 该行不出现；HUD 模式提示时不画 |
-| 布局 | 底部 = hairline 分割线 + 编码行，宽度按提示文本自适应，8 套主题的编码行色自动适配 |
+| 布局 | 底部 = hairline 分割线 + 编码行，宽度按提示文本自适应，13 套主题的编码行色自动适配 |
 
 ---
 
