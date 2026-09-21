@@ -4,7 +4,7 @@
 # 产出：仓库根目录下的 SimpleFly.app.zip —— 一个已签名、内嵌 tis_register 与
 # self_update.sh 的 SimpleFly.app。把它作为 asset 名「SimpleFly.app.zip」上传到
 # GitHub Release（tag 建议与 Info.plist 的 CFBundleShortVersionString 一致，例如
-# 0.7.0），自更新器才能正确比较版本并下载。
+# 0.7.1），自更新器才能正确比较版本并下载。
 #
 # 需要：本机已装 Xcode Command Line Tools（clang / xcrun / zip / codesign）。
 # 普通用户不需要这些——他们只下载上面那个 zip。

@@ -1532,29 +1532,48 @@ static void test_webdav_sync(void)
     CHECK(TypeKey(kVK_ANSI_D, mods) == YES, "Ctrl+Shift+D 被输入法消费");
     CHECK([HUDText() containsString:@"未配置网盘"], "恢复键同样给引导提示：%s", CStr(HUDText()));
 
-    /* 状态栏菜单：四项（0.6.3 起第 1 项是编码提示开关）、动作选择器正确、target 指向控制器 */
+    /* 状态栏菜单：0.7.0 起六项 —— 更新到最新版本 / 分隔线 / 编码提示 / 同步 / 恢复 / 配置。
+     * 断言动作选择器、target，以及「标题只留动作名、不带括号补充说明」（说明在 用户手册.md）。 */
     NSMenu *m = [gCtl menu];
-    CHECK(m != nil && m.numberOfItems == 4, "菜单有四项（实际 %lu）",
+    CHECK(m != nil && m.numberOfItems == 6, "菜单有六项（实际 %lu）",
           (unsigned long)(m ? m.numberOfItems : 0));
     if (!m) return;
-    CHECK([m itemAtIndex:0].action == @selector(menuToggleCodeHint:) &&
-          [m itemAtIndex:0].target == gCtl, "第一项 = 编码提示开关");
-    CHECK([m itemAtIndex:1].action == @selector(menuWebDAVSyncUp:) &&
-          [m itemAtIndex:1].target == gCtl, "第二项 = 同步到网盘");
-    CHECK([m itemAtIndex:2].action == @selector(menuWebDAVSyncDown:) &&
-          [m itemAtIndex:2].target == gCtl, "第三项 = 从网盘恢复");
-    CHECK([m itemAtIndex:3].action == @selector(menuWebDAVConfig:) &&
-          [m itemAtIndex:3].target == gCtl, "第四项 = 网盘配置…");
-    CHECK([[m itemAtIndex:0].title containsString:@"编码提示"] &&
-          [[m itemAtIndex:1].title containsString:@"同步"] &&
-          [[m itemAtIndex:2].title containsString:@"恢复"] &&
-          [[m itemAtIndex:3].title containsString:@"网盘配置"], "标题用中文动词，不写术语");
+    CHECK([m itemAtIndex:0].action == @selector(menuUpdate:) &&
+          [m itemAtIndex:0].target == gCtl, "第一项 = 更新到最新版本");
+    CHECK([m itemAtIndex:1].isSeparatorItem, "第二项 = 分隔线");
+    CHECK([m itemAtIndex:2].action == @selector(menuToggleCodeHint:) &&
+          [m itemAtIndex:2].target == gCtl, "第三项 = 编码提示开关");
+    CHECK([m itemAtIndex:3].action == @selector(menuWebDAVSyncUp:) &&
+          [m itemAtIndex:3].target == gCtl, "第四项 = 同步到网盘");
+    CHECK([m itemAtIndex:4].action == @selector(menuWebDAVSyncDown:) &&
+          [m itemAtIndex:4].target == gCtl, "第五项 = 从网盘恢复");
+    CHECK([m itemAtIndex:5].action == @selector(menuWebDAVConfig:) &&
+          [m itemAtIndex:5].target == gCtl, "第六项 = 网盘配置…");
+    CHECK([[m itemAtIndex:2].title containsString:@"编码提示"] &&
+          [[m itemAtIndex:3].title containsString:@"同步"] &&
+          [[m itemAtIndex:4].title containsString:@"恢复"] &&
+          [[m itemAtIndex:5].title containsString:@"网盘配置"], "标题用中文动词，不写术语");
+    /* 菜单文案精简：动作名精确匹配，且任何一项都不带括号补充说明 */
+    CHECK([[m itemAtIndex:0].title isEqualToString:@"更新到最新版本"],
+          "更新项标题 = 更新到最新版本：%s", CStr([m itemAtIndex:0].title));
+    CHECK([[m itemAtIndex:3].title isEqualToString:@"同步到网盘"],
+          "同步项标题 = 同步到网盘：%s", CStr([m itemAtIndex:3].title));
+    CHECK([[m itemAtIndex:4].title isEqualToString:@"从网盘恢复…"],
+          "恢复项标题 = 从网盘恢复…：%s", CStr([m itemAtIndex:4].title));
+    CHECK([[m itemAtIndex:5].title isEqualToString:@"网盘配置…"],
+          "配置项标题 = 网盘配置…：%s", CStr([m itemAtIndex:5].title));
+    for (NSInteger i = 0; i < (NSInteger)m.numberOfItems; i++) {
+        NSString *t = [m itemAtIndex:i].title;
+        CHECK([t rangeOfString:@"（"].location == NSNotFound &&
+              [t rangeOfString:@"("].location == NSNotFound,
+              "第 %ld 项标题不含括号说明：%s", (long)i, CStr(t));
+    }
     /* 菜单项标题反映当前开关状态（默认关） */
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
-    CHECK([[[gCtl menu] itemAtIndex:0].title containsString:@"关"],
+    CHECK([[[gCtl menu] itemAtIndex:2].title containsString:@"关"],
           "关状态：菜单标题显示「关」");
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"CodeHint"];
-    CHECK([[[gCtl menu] itemAtIndex:0].title containsString:@"开"],
+    CHECK([[[gCtl menu] itemAtIndex:2].title containsString:@"开"],
           "开状态：菜单标题显示「开」");
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"CodeHint"];
 }

@@ -1003,17 +1003,19 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
      * 没有 → 下载 GitHub Release 预编译包直接安装（普通用户，无需 git / Xcode CLT）。
      * 以 NSTask 启动独立 zsh 进程执行，install 末尾 pkill -x SimpleFly 只杀旧输入法，
      * 不会带走这个更新器。 */
-    NSMenuItem *upd = [[NSMenuItem alloc] initWithTitle:@"更新到最新版"
+    NSMenuItem *upd = [[NSMenuItem alloc] initWithTitle:@"更新到最新版本"
                                                   action:@selector(menuUpdate:)
                                            keyEquivalent:@""];
     upd.target = self;
     [m addItem:upd];
     [m addItem:[NSMenuItem separatorItem]];
 
-    /* 候选窗底部编码提示：带当前状态，点击翻转（等价 Ctrl+Shift+H） */
+    /* 候选窗底部编码提示：标题只带当前状态（开 / 关），点击翻转（等价 Ctrl+Shift+H）。
+     * 快捷键由 keyEquivalent 交给系统在菜单右侧渲染，不写进标题——菜单只留动作名，
+     * 行为细节见 用户手册.md「输入法菜单一览」。 */
     BOOL hintOn = [[NSUserDefaults standardUserDefaults] boolForKey:@"CodeHint"];
     NSMenuItem *hint = [[NSMenuItem alloc] initWithTitle:
-                            [NSString stringWithFormat:@"候选窗编码提示 %@（⌃⇧H）",
+                            [NSString stringWithFormat:@"候选窗编码提示 %@",
                              hintOn ? @"开 ✓" : @"关"]
                                                      action:@selector(menuToggleCodeHint:)
                                               keyEquivalent:@"h"];
@@ -1021,7 +1023,7 @@ static NSString *SFWebDAVErrorText(NSInteger status, NSError *err)
     hint.target = self;
     [m addItem:hint];
 
-    NSMenuItem *up = [[NSMenuItem alloc] initWithTitle:@"同步到网盘（短语·重码记忆）"
+    NSMenuItem *up = [[NSMenuItem alloc] initWithTitle:@"同步到网盘"
                                                 action:@selector(menuWebDAVSyncUp:)
                                          keyEquivalent:@"u"];
     up.keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagShift;
