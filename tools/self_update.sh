@@ -183,10 +183,21 @@ if [ -d "$DEST" ]; then
   fi
   if [ -n "$TISREG" ]; then
     log "免登刷新（tis_register --enable）…"
-    if "$TISREG" "$DEST" --enable >>"$LOG" 2>&1; then
+    # 紧跟 bundle 替换之后，第一次调用偶发段错误退出（实测 0.7.2 装机时拿到退出码 139，
+    # 且无任何输出；隔一下再跑就正常）。不重试会把「其实已经刷新成功」误报成失败，
+    # 反而误导人去查输入法列表。
+    RC=0
+    "$TISREG" "$DEST" --enable >>"$LOG" 2>&1 || RC=$?
+    if [ "$RC" -ne 0 ]; then
+      log "免登刷新未成功（退出码 $RC），重试一次…"
+      sleep 1
+      RC=0
+      "$TISREG" "$DEST" --enable >>"$LOG" 2>&1 || RC=$?
+    fi
+    if [ "$RC" -eq 0 ]; then
       log "免登刷新成功"
     else
-      log "免登刷新失败（可能需要注销重登）—— 更新已生效，仅输入法列表未刷新"
+      log "免登刷新失败（退出码 $RC，可能需要注销重登）—— 更新已生效，仅输入法列表未刷新"
     fi
   else
     log "未找到 tis_register，跳过免登刷新（可能需要注销重登）"
