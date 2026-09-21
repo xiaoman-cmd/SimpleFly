@@ -317,6 +317,7 @@ killall SimpleFly
 | 反馈 | 菜单点击即弹 HUD「已在后台启动更新…」；成功/失败用系统通知；全程日志在 `/tmp/simplefly_update.log` |
 | 自定义仓库路径 | 默认 `/Users/phoenix/WorkBuddy/SimpleFly`；终端 `defaults write com.simplefly.inputmethod.SimpleFly UpdateRepo /你的/仓库/路径` 可覆盖（仅影响源码模式） |
 | 出包（给普通用户） | 开发者跑 `tools/package_release.sh` 生成 `SimpleFly.app.zip`，作为 asset 名 `SimpleFly.app.zip` 上传 GitHub Release（tag 建议与 `CFBundleShortVersionString` 一致，如 `0.7.3`） |
+| 发 Release | 出包后跑 `GH_TOKEN=<PAT> ./tools/publish_release.sh`（可选 `--body <说明.md>`、`--repo owner/name`）。脚本自己读版本号、确认 tag 已 push、**同 tag 已有 Release 就拒绝重跑**、建 Release、传 asset，最后做**匿名端到端复核**（latest tag / 体积 / sha256 / 解压后版本号与签名）。PAT 需 **Contents: Read and write**（fine-grained → Repository permissions 那份），只走环境变量不落盘 |
 
 ### 简繁转换（0.5.4 最简版；0.5.6 双向 + 直接繁体输出）
 
