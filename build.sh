@@ -10,9 +10,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 APP="$ROOT/build/SimpleFly.app"
 SDK="$(xcrun --show-sdk-path)"
-# 默认 11.0；老版 Command Line Tools（clang < 12 不认识 11.0）可外部覆盖：
-#   SIMPLEFLY_MIN_MACOS=10.15 ./build.sh
-MIN_MACOS="${SIMPLEFLY_MIN_MACOS:-11.0}"
+# 部署目标：默认 11.0。老版 Command Line Tools 的 clang（主版本 < 12）不认识 11.0，
+# 会直接报 invalid version number in '-mmacosx-version-min=11.0' 而构建失败 ——
+# 这里自动探测并回退到 10.15，与 package_release.sh / self_update.sh 同一套规则。
+# 想指定别的版本仍可外部覆盖：SIMPLEFLY_MIN_MACOS=12.0 ./build.sh
+CLANG_VER="$(clang --version 2>/dev/null | sed -n 's/.*clang version \([0-9]*\).*/\1/p')"
+if [ -n "$CLANG_VER" ] && [ "$CLANG_VER" -lt 12 ]; then
+    MIN_MACOS="${SIMPLEFLY_MIN_MACOS:-10.15}"
+else
+    MIN_MACOS="${SIMPLEFLY_MIN_MACOS:-11.0}"
+fi
 DICT="$ROOT/resources/simplefly.dict"
 
 # 本仓库不含码表（版权归小鹤官方，见 NOTICE）。优先用 resources/ 下自己生成的那份，
@@ -32,7 +39,7 @@ CFLAGS=(-O2 -Wall -Wextra -Wno-unused-command-line-argument
 # 只在一种场景用到：
 #   SIMPLEFLY_ARCH=x86_64 ./build.sh --test   在 M 系列机上预演「移植到 Intel」
 #                                             （Rosetta 下跑同一套单测，验证 x86 语义）
-# 实测 346 项全通过。产物不能直接跨机器安装 —— arm64 二进制在 Intel 上加载不了，
+# 实测 571 项全通过。产物不能直接跨机器安装 —— arm64 二进制在 Intel 上加载不了，
 # 换机器只能拷源码重编译（详见 用户手册.md §九）。
 #
 # 注意：这里必须判空后再前置展开，不能写 "${ARR[@]}"。
