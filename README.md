@@ -1,5 +1,7 @@
 # SimpleFly · macOS 小鹤输入法
 
+📖 **在线介绍页**：<https://xiaoman-cmd.github.io/SimpleFly/>（GitHub Pages，源文件为 [`docs/index.html`](docs/index.html)）
+
 一个**最小可用**的 macOS 输入法：自家实现的输入引擎 + InputMethodKit 前端，支持**小鹤双拼**与**小鹤音形**。
 只用 Command Line Tools 里的 `clang` 编译，不需要 Xcode 工程；装在自己家的输入法目录，不做签名、公证、分发。
 
