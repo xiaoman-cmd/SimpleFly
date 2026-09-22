@@ -497,3 +497,11 @@ python3 tools/build_dict.py /path/to/rime-flypy/flypy -o resources/simplefly.dic
 
 实现权衡、故障排查（「装好了但系统设置里看不到」的完整分析）、图标渲染原理、逐版本变更记录：
 见 **[docs/开发笔记.md](docs/开发笔记.md)**。使用者文档见 [用户手册.md](用户手册.md)。
+
+---
+
+## 赞助
+
+如果这个输入法对你有用，欢迎扫码赞助，支持它持续更新。
+
+![赞助二维码](docs/sponsor.png)

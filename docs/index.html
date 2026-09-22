@@ -139,6 +139,20 @@
   .disclaimer strong { color: var(--fg); }
 
   footer { border-top: 1px solid var(--border); padding: 36px 0 48px; color: var(--fg-dim); font-size: 13.5px; text-align: center; }
+
+  /* ---- sponsor block ---- */
+  .sponsor {
+    display: flex; align-items: center; gap: 18px;
+    max-width: 440px; margin: 0 auto 22px; padding: 18px 20px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--bg-soft);
+    text-align: left;
+  }
+  .sponsor-qr { width: 108px; height: 108px; border-radius: 8px; background: #fff; padding: 6px; flex: none; }
+  .sponsor-info { font-size: 13.5px; }
+  .sponsor-title { color: var(--fg); font-weight: 600; font-size: 15px; margin-bottom: 6px; }
+  .sponsor-sub { color: var(--fg-dim); }
+  .footer-line { margin-top: 4px; }
+  @media (max-width: 520px) { .sponsor { flex-direction: column; text-align: center; } .sponsor-info { text-align: center; } }
 </style>
 </head>
 <body>
@@ -265,7 +279,14 @@
 
 <footer>
   <div class="wrap">
-    SimpleFly · 用 clang 写出来的 macOS 输入法 · <a href="https://github.com/xiaoman-cmd/SimpleFly">GitHub</a>
+    <div class="sponsor">
+      <img class="sponsor-qr" src="sponsor.png" alt="赞助二维码">
+      <div class="sponsor-info">
+        <p class="sponsor-title">如果这个输入法对你有用，欢迎赞助支持</p>
+        <p class="sponsor-sub">扫码赞助，支持 SimpleFly 持续更新。</p>
+      </div>
+    </div>
+    <p class="footer-line">SimpleFly · 用 clang 写出来的 macOS 输入法 · <a href="https://github.com/xiaoman-cmd/SimpleFly">GitHub</a></p>
   </div>
 </footer>
 
